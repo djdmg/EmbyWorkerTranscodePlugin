@@ -42,10 +42,22 @@ public static partial class EmbyFilters
         }
         if (!StandardAlgorithms.Contains(algorithm))
             algorithm = "hable";
+        // tonemap's default desat=2 washes the highlights out to near white (measured on an HDR10 test pattern against
+        // libplacebo); without a desat from Emby, none.
+        if (!options.Any(o => o.StartsWith("desat=", StringComparison.Ordinal)))
+            options.Add("desat=0");
         options.Insert(0, "tonemap=" + algorithm);
         return $"zscale@{inst}_lin=t=linear:npl=100,format@{inst}_f32=gbrpf32le,zscale@{inst}_p709=p=bt709," +
                $"tonemap@{inst}={string.Join(':', options)},zscale@{inst}_t709=t=bt709:m=bt709:r=tv";
     });
+
+    /// <summary>
+    /// An ffmpeg argument list with the value of every filter option (-filter_complex, -filter, -vf, -af) translated.
+    /// The coordinator sends conversion slices translated this way, so every slice of a film gets the same graph
+    /// whatever the version of the machine that encodes it (a worker's own translation then finds nothing to do).
+    /// </summary>
+    public static string[] TranslateArgs(IReadOnlyList<string> args) =>
+        args.Select((a, i) => i > 0 && args[i - 1] is "-filter_complex" or "-filter" or "-vf" or "-af" ? Translate(a) : a).ToArray();
 
     /// <summary>Required filters with Emby-only ones replaced by the standard filters they translate to.</summary>
     public static IEnumerable<string> ExpandRequirements(IEnumerable<string> filters) =>

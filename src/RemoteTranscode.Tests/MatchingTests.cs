@@ -73,15 +73,15 @@ public class EmbyFilterTests
     {
         string t = EmbyFilters.Translate(EmbyHdrGraph);
         Assert.DoesNotContain("supertonemap", t);
-        Assert.Contains("tonemap@f4=tonemap=hable", t);
+        Assert.Contains("tonemap@f4=tonemap=hable:desat=0", t);
         Assert.Contains("zscale@f4_lin=t=linear:npl=100", t);
         Assert.EndsWith("format@f6=pix_fmts=yuv420p[f6_out0]", t);
         Assert.All(ArgTemplateValidator.FilterNames(t), f => Assert.Contains(f, new[] { "scale", "setparams", "format", "zscale", "tonemap" }));
     }
 
     [Theory]
-    [InlineData("supertonemap", "tonemap=hable")]
-    [InlineData("supertonemap=bt2390", "tonemap=hable")]          // no standard bt2390
+    [InlineData("supertonemap", "tonemap=hable:desat=0")]
+    [InlineData("supertonemap=bt2390", "tonemap=hable:desat=0")]          // no standard bt2390
     [InlineData("supertonemap=tonemap=mobius:desat=0.5", "tonemap=mobius:desat=0.5")]
     public void Options_are_carried_over(string filter, string expected) =>
         Assert.Contains(expected, EmbyFilters.Translate(filter));

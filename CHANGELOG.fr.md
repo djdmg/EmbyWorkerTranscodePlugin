@@ -6,6 +6,15 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.23 et worker 0.7.14 — 01/11/2026
+
+Construits et publiés par GitHub Actions (release v0.7.23).
+
+### Corrigé
+
+- **Plugin, worker** — Les conversions HDR → SDR délavaient les hautes lumières jusqu'au blanc : le filtre standard `tonemap` qui remplace le `supertonemap` d'Emby désature les hautes lumières par défaut (`desat=2`). La traduction fixe maintenant `desat=0` sauf si Emby demande une valeur (constaté sur une mire HDR10 comparée à libplacebo ; moins marqué sur un vrai film, mais réel).
+- **Plugin** — Toutes les tranches d'une conversion reçoivent maintenant le même graphe de filtres, quelle que soit la machine qui les encode : le coordinateur traduit les filtres propres à Emby avant d'envoyer une tranche, au lieu de laisser chaque worker le faire (un worker plus ancien aurait gardé le rendu délavé pour ses tranches).
+
 ## Plugin 0.7.22 — 01/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.22).

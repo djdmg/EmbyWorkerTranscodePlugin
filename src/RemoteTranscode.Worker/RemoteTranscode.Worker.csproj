@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>EmbyRemoteWorker</AssemblyName>
-    <Version>0.7.13</Version>
+    <Version>0.7.14</Version>
     <!-- Taskbar, shortcuts and installed apps; drawn by tools\make-worker-icon.py. -->
     <ApplicationIcon>Assets\worker.ico</ApplicationIcon>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

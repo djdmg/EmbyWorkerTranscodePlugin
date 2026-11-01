@@ -8,6 +8,15 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.23 and worker 0.7.14 — 2026-11-01
+
+Built and published by GitHub Actions (release v0.7.23).
+
+### Fixed
+
+- **Plugin, worker** — HDR → SDR conversions washed the highlights out to near white: the standard `tonemap` filter that stands in for Emby's `supertonemap` desaturates highlights by default (`desat=2`). The translation now sets `desat=0` unless Emby asks for a value (seen on an HDR10 test pattern compared with libplacebo; less marked on real films, but real).
+- **Plugin** — Every slice of a conversion now gets the same filter graph whoever encodes it: the coordinator translates Emby-only filters before sending a slice, instead of leaving it to each worker (an older worker would otherwise have kept the washed-out rendering for its slices).
+
 ## Plugin 0.7.22 — 2026-11-01
 
 Built and published by GitHub Actions (release v0.7.22).

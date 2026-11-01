@@ -936,8 +936,9 @@ public sealed class EncodeQueue : IJobOwner
         // Only the very first run of the first slice starts with the source and needs no seek.
         bool seek = !(slice.Index == 0 && startIndex == slice.FirstChunk);
         double? end = slice.Last ? task.Source?.DurationSeconds : slice.End;
-        string[] template = EmbyConversionPlanner.ChunkArgs(task.ChunkTemplate, startIndex, startSeconds, seek,
-            slice.Last ? null : slice.End, end - startSeconds);
+        // Filters translated here (EmbyFilters.TranslateArgs): the same graph for every slice, whoever encodes it.
+        string[] template = EmbyFilters.TranslateArgs(EmbyConversionPlanner.ChunkArgs(task.ChunkTemplate, startIndex, startSeconds, seek,
+            slice.Last ? null : slice.End, end - startSeconds));
         var file = new PlannedFile(0, JobFileKind.Input, task.Input, Path.GetFileName(task.Input), inputSize);
         return new JobPlan(true, "conversion", template, [file], EmbyConversionPlanner.ChunkSeconds, startIndex,
             $"encode/{task.Id}/seg_%d.ts", $"encode/{task.Id}/list.m3u8", task.Requirements)
