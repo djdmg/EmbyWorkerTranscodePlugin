@@ -40,3 +40,6 @@ docs/pdf/
 # Old manual test outputs
 test/out/
 test/*.mp4
+
+# Local secrets (never published)
+secret/
