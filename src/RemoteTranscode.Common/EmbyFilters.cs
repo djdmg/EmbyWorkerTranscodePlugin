@@ -2,34 +2,72 @@ using System.Text.RegularExpressions;
 
 namespace RemoteTranscode.Common;
 
+/// <summary>How Emby's HDR→SDR "supertonemap" is translated into standard FFmpeg filters.</summary>
+public enum ToneMapper
+{
+    /// <summary>zscale + tonemap on the CPU: any FFmpeg build with zscale, the server's included.</summary>
+    Zscale,
+    /// <summary>
+    /// libplacebo on the GPU through Vulkan (2 to 2.4 times faster, ~8 % CPU instead of ~50 %): only workers whose
+    /// capability probe validated it (<see cref="WorkerCapabilities.GpuToneMapping"/>). Same frames and timestamps as
+    /// <see cref="Zscale"/>, but a slightly different rendering, so a conversion never mixes the two.
+    /// </summary>
+    Libplacebo,
+}
+
 /// <summary>
 /// Filters that only exist in Emby's ffmpeg fork, and their equivalent with standard FFmpeg filters, so workers running
 /// a regular FFmpeg build can execute Emby's filter graphs.
 /// </summary>
 public static partial class EmbyFilters
 {
-    /// <summary>Standard filters a worker needs to run each Emby-only filter.</summary>
-    public static readonly IReadOnlyDictionary<string, string[]> Equivalents = new Dictionary<string, string[]>(StringComparer.Ordinal)
+    /// <summary>Name of the Vulkan device libplacebo runs on (-init_hw_device vulkan=vk... -filter_hw_device vk).</summary>
+    public const string VulkanDevice = "vk";
+
+    /// <summary>Standard filters a worker needs to run each Emby-only filter, for each tone mapper.</summary>
+    private static readonly IReadOnlyDictionary<string, string[]> ZscaleEquivalents = new Dictionary<string, string[]>(StringComparer.Ordinal)
     {
         ["supertonemap"] = ["zscale", "format", "tonemap"],
+    };
+
+    private static readonly IReadOnlyDictionary<string, string[]> LibplaceboEquivalents = new Dictionary<string, string[]>(StringComparer.Ordinal)
+    {
+        ["supertonemap"] = ["hwupload", "libplacebo", "hwdownload", "format"],
     };
 
     // supertonemap[@instance][=options] up to the next filter separator or output label.
     [GeneratedRegex(@"supertonemap(?<inst>@[A-Za-z0-9_]+)?(?:=(?<opts>[^,;\[]*))?")]
     private static partial Regex SuperToneMap();
 
+    // A libplacebo filter instance in a graph (name at the start of a filter, optional @instance, then '=', ',', ';', '[' or the end).
+    [GeneratedRegex(@"(?:^|[,;\]])\s*libplacebo(?:@[A-Za-z0-9_]+)?\s*(?:[=,;\[]|$)")]
+    private static partial Regex LibplaceboFilter();
+
     // Algorithms of the standard tonemap filter; bt2390 (supertonemap's default) has no standard counterpart.
     private static readonly HashSet<string> StandardAlgorithms = new(StringComparer.Ordinal) { "none", "linear", "gamma", "clip", "reinhard", "hable", "mobius" };
 
+    // supertonemap algorithm → libplacebo tonemapping function.
+    private static readonly Dictionary<string, string> LibplaceboAlgorithms = new(StringComparer.Ordinal)
+    {
+        ["bt2390"] = "bt.2390", ["hable"] = "hable", ["mobius"] = "mobius", ["reinhard"] = "reinhard",
+        ["clip"] = "clip", ["linear"] = "linear", ["gamma"] = "gamma",
+    };
+
     /// <summary>
-    /// Replaces Emby's HDR→SDR "supertonemap" with zscale (linearise, BT.2020→BT.709 primaries) + tonemap + zscale
-    /// (BT.709 transfer/matrix). Emby surrounds it with setparams/format filters that stay valid around the chain.
+    /// Replaces Emby's HDR→SDR "supertonemap" with standard filters. Emby surrounds it with setparams/format filters
+    /// that stay valid around either chain.
+    /// <list type="bullet">
+    /// <item><see cref="ToneMapper.Zscale"/>: zscale (linearise, BT.2020→BT.709 primaries) + tonemap + zscale (BT.709 transfer/matrix).</item>
+    /// <item><see cref="ToneMapper.Libplacebo"/>: hwupload → libplacebo (Vulkan) → hwdownload, BT.709 limited-range yuv420p
+    /// out. peak_detect=0: libplacebo's scene peak detection would otherwise give each slice of a film its own
+    /// brightness (it starts over with every run).</item>
+    /// </list>
     /// </summary>
-    public static string Translate(string graph) => SuperToneMap().Replace(graph, m =>
+    public static string Translate(string graph, ToneMapper mode = ToneMapper.Zscale) => SuperToneMap().Replace(graph, m =>
     {
         string inst = m.Groups["inst"].Success ? m.Groups["inst"].Value[1..] : "stm";
         var options = new List<string>();
-        string algorithm = "hable";
+        string? algorithm = null;
         foreach (string pair in (m.Groups["opts"].Value ?? "").Split(':', StringSplitOptions.RemoveEmptyEntries))
         {
             string[] kv = pair.Split('=', 2);
@@ -40,7 +78,14 @@ public static partial class EmbyFilters
             else if (kv[0] is "param" or "desat" or "peak")
                 options.Add(pair);
         }
-        if (!StandardAlgorithms.Contains(algorithm))
+        if (mode == ToneMapper.Libplacebo)
+        {
+            // supertonemap's default is BT.2390, which libplacebo has; tonemap's options (param, desat, peak) do not apply.
+            string function = algorithm != null && LibplaceboAlgorithms.TryGetValue(algorithm, out string? f) ? f : "bt.2390";
+            return $"hwupload@{inst}_up,libplacebo@{inst}=tonemapping={function}:peak_detect=0:colorspace=bt709:color_primaries=bt709:" +
+                   $"color_trc=bt709:range=tv:format=yuv420p,hwdownload@{inst}_dl,format@{inst}_f=yuv420p";
+        }
+        if (algorithm is null || !StandardAlgorithms.Contains(algorithm))
             algorithm = "hable";
         // tonemap's default desat=2 washes the highlights out to near white (measured on an HDR10 test pattern against
         // libplacebo); without a desat from Emby, none.
@@ -56,10 +101,25 @@ public static partial class EmbyFilters
     /// The coordinator sends conversion slices translated this way, so every slice of a film gets the same graph
     /// whatever the version of the machine that encodes it (a worker's own translation then finds nothing to do).
     /// </summary>
-    public static string[] TranslateArgs(IReadOnlyList<string> args) =>
-        args.Select((a, i) => i > 0 && args[i - 1] is "-filter_complex" or "-filter" or "-vf" or "-af" ? Translate(a) : a).ToArray();
+    public static string[] TranslateArgs(IReadOnlyList<string> args, ToneMapper mode = ToneMapper.Zscale) =>
+        args.Select((a, i) => i > 0 && IsFilterOption(args[i - 1]) ? Translate(a, mode) : a).ToArray();
 
     /// <summary>Required filters with Emby-only ones replaced by the standard filters they translate to.</summary>
-    public static IEnumerable<string> ExpandRequirements(IEnumerable<string> filters) =>
-        filters.SelectMany(f => Equivalents.TryGetValue(f, out var eq) ? eq : [f]).Distinct();
+    public static IEnumerable<string> ExpandRequirements(IEnumerable<string> filters, ToneMapper mode = ToneMapper.Zscale)
+    {
+        var equivalents = mode == ToneMapper.Libplacebo ? LibplaceboEquivalents : ZscaleEquivalents;
+        return filters.SelectMany(f => equivalents.TryGetValue(f, out var eq) ? eq : [f]).Distinct();
+    }
+
+    /// <summary>Whether a filter graph uses libplacebo (it then needs the worker's Vulkan device).</summary>
+    public static bool UsesLibplacebo(string graph) => LibplaceboFilter().IsMatch(graph);
+
+    /// <summary>Whether an argument list has a filter graph using libplacebo.</summary>
+    public static bool UsesLibplacebo(IReadOnlyList<string> args) =>
+        args.Where((a, i) => i > 0 && IsFilterOption(args[i - 1].Split(':')[0])).Any(UsesLibplacebo);
+
+    /// <summary>Whether Emby asked for HDR→SDR tone mapping (supertonemap among the required filters).</summary>
+    public static bool NeedsToneMapping(IEnumerable<string> filters) => filters.Contains("supertonemap");
+
+    private static bool IsFilterOption(string a) => a is "-filter_complex" or "-filter" or "-vf" or "-af";
 }

@@ -8,6 +8,25 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.26 and worker 0.7.15 — 2026-11-01
+
+### Added
+
+- **Worker** — HDR → SDR tone mapping on the GPU: libplacebo through Vulkan, 2 to 2.4 times faster than the processor chain with about 8 % CPU instead of about 50 % (4K and 1080p HDR10, measured on an Intel iGPU), same frames and timestamps. Validated at start-up by a probe that tone maps a generated PQ clip with the exact chain jobs use and compares it with the processor chain (PSNR, at least 20 dB; an exit code 0 is not enough: the default Vulkan device of an Intel iGPU returns pink/green pictures without any error). Each Vulkan device (the encoders' GPU first, then the default one) is tried as is, then with `disable_multiplane=1,linear_images=1`, which fixes Intel. The validated method and device are announced to the coordinator (`WorkerCapabilities.GpuToneMapping`); the capabilities cache is renewed.
+- **Worker** — Setting « HDR → SDR (tone mapping) par le GPU quand il a été validé au démarrage » (on by default); the worker window shows how HDR is tone mapped. After 3 failures GPU tone mapping is suspended until the next start, like GPU decoding: playback falls back to the processor at once (same frames), conversion slices tone mapped on the GPU are refused.
+- **Plugin** — The coordinator chooses the tone mapper of each HDR conversion when it captures it and freezes it: libplacebo when at least one connected worker can run the conversion that way, zscale otherwise. It translates every slice itself in that mode; slices of a libplacebo conversion only go to workers with the capability, never to the server (Emby's ffmpeg has no libplacebo); with no such worker connected for `EncodeNoWorkerMinutes` the conversion is given back to Emby. zscale and libplacebo are never mixed in one episode. The status shows the conversion's `ToneMapping`.
+- **Plugin, worker** — Translation of `supertonemap` in libplacebo mode: `hwupload`, `libplacebo` (`tonemapping` from Emby's algorithm, `bt2390` → `bt.2390`, the default; `peak_detect=0`, otherwise the brightness would change from one slice to the next; BT.709 limited-range `yuv420p`), `hwdownload`, `format`. The worker names its validated Vulkan device (`-init_hw_device … -filter_hw_device vk`) before the inputs. The zscale translation (`desat=0`) stays the fallback.
+- **Worker** — Playback is tone mapped by the worker that runs it, on its GPU when validated. A playback moving between two workers of different capability may change rendering slightly from that point.
+- **Installer** — The worker now bundles gyan.dev's FFmpeg 9.0.2 "full" build (the "essentials" build has no libplacebo): setup of 218 MB instead of 170 MB.
+
+### Security
+
+- **Worker** — The job validator accepts `libplacebo` but refuses its user shader options (`custom_shader_path`, `custom_shader_bin`).
+
+### Bench
+
+- Test workers use the "full" FFmpeg build. T21: HDR conversion with w1 alone, tone mapped on its GPU (libplacebo in every graph sent, Vulkan device on the command line, no slice on the server, frame count identical to the source). 215 unit tests.
+
 ## Plugin 0.7.25 — 2026-11-01
 
 Built and published by GitHub Actions (release v0.7.25).

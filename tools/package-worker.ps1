@@ -3,15 +3,16 @@
 #   pwsh tools\package-worker.ps1
 param(
     [string]$FfmpegVersion = '9.0.2',
-    # SHA-256 published by gyan.dev for ffmpeg-<version>-essentials_build.zip
-    [string]$FfmpegSha256 = '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba',
+    # SHA-256 of gyan.dev's ffmpeg-<version>-full_build.zip. "full" rather than "essentials" since worker 0.7.15: only it
+    # has libplacebo (HDR -> SDR on the GPU through Vulkan).
+    [string]$FfmpegSha256 = '759d0a9831c436a0eb331ad36f236c06cb04aaa0005da46571f0e9d3d9206f6b',
     # Never the folder a worker runs from (artifacts\worker\EmbyRemoteWorker on the development PC): its locked exe
     # would silently stay at the old version.
     [string]$Out = "$PSScriptRoot\..\artifacts\worker-package"
 )
 $ErrorActionPreference = 'Stop'
 $env:PATH = "C:\Program Files\dotnet;$env:PATH"
-$name = "ffmpeg-$FfmpegVersion-essentials_build"
+$name = "ffmpeg-$FfmpegVersion-full_build"
 $cache = Join-Path $env:LOCALAPPDATA "EmbyRemoteWorker-build\$name"
 $zip = "$cache.zip"
 
@@ -42,7 +43,7 @@ Copy-Item "$cache\bin\ffmpeg.exe" $ff
 Copy-Item "$cache\LICENSE" "$ff\LICENSE.txt"
 Copy-Item "$cache\README.txt" "$ff\README-build.txt"
 @"
-FFmpeg $FfmpegVersion — build "essentials" de gyan.dev (https://www.gyan.dev/ffmpeg/builds/)
+FFmpeg $FfmpegVersion — build « full » de gyan.dev (https://www.gyan.dev/ffmpeg/builds/), avec libplacebo (tone mapping HDR sur le GPU)
 Licence : GNU GPL v3 (voir LICENSE.txt). Ce FFmpeg est un programme séparé, exécuté par Emby Remote Worker.
 
 Sources correspondantes :

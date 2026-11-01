@@ -349,6 +349,7 @@ Tab « Paramètres ». Click « Enregistrer » (Save) to apply, « Annuler » (C
 | « Conversions : encodage par le GPU » (Conversions: encoding on the GPU) | off | Faster. If a slice is then resumed on the server, one file mixes two encoders (see limitations). |
 | « Lectures : encodage par le GPU » (Playbacks: encoding on the GPU) | off | Much faster on a laptop. The picture from the worker and from the server is slightly different. Off = same encoder as the server, so hand-overs are invisible. |
 | « Décodage vidéo par le GPU quand l'encodage s'y fait » (GPU video decoding when encoding on the GPU) | on | Relieves the processor; identical picture. Only used when one of the two options above is on. Falls back to the processor automatically if needed. |
+| « HDR → SDR (tone mapping) par le GPU quand il a été validé au démarrage » (HDR → SDR tone mapping on the GPU when validated at start-up) | on | Much faster and relieves the processor (see 7.3). Off: the worker no longer receives conversions tone mapped on the GPU and tone maps playback on the processor. Changing it reconnects the worker. |
 | « Tâches simultanées maximum » (Maximum simultaneous jobs) | 2 | A conversion only uses a free slot. |
 | « Refaire la détection du matériel » (Detect hardware again) | — | Re-tests the encoders, for example after a driver update. |
 | « Manuel » / « Automatique » (Availability mode) | Manual, 10 min | See 6.4. |
@@ -400,7 +401,18 @@ A conversion is accepted as soon as a capable worker is connected **or** the ser
 
 ### 7.3 HDR to SDR
 
-When Emby converts an HDR movie to SDR, the tone mapping is done with standard FFmpeg filters, identically on workers and on the server, so every slice looks the same. If the server cannot do it, it leaves those slices to the workers. HDR conversions are heavy: a PC with a graphics card helps a lot.
+When Emby converts an HDR movie to SDR, the tone mapping is done with standard FFmpeg filters, in one of two ways:
+
+- **On the graphics card** (plugin 0.7.26 and worker 0.7.15 or later): libplacebo, 2 to 2.4 times faster, using about 8 % of the processor instead of about 50 %. Each worker checks at start-up that its graphics card gives the right picture (it compares it with the processor's; some drivers give a corrupted picture without any error, and the worker then tries again with safer options or does without). The worker window shows « HDR → SDR : GPU (libplacebo) » when it is validated.
+- **On the processor** (zscale + tonemap): any worker, and the server.
+
+The choice is made **once per conversion**, when Emby starts it: on the graphics card if at least one connected worker has validated it, otherwise on the processor. Every slice of the episode then uses the same method, so the whole file looks the same: a conversion on the graphics card is only given to workers that can do it (never to the server), and if none of them is connected for 30 minutes it goes back to Emby. A conversion on the processor can still go to any worker and to the server.
+
+A worker whose graphics-card tone mapping fails three times stops using it until it is restarted (playback falls back to the processor; conversions on the graphics card go to other workers). To switch it off for good, untick « HDR → SDR (tone mapping) par le GPU… » in the worker settings (6.5).
+
+Playback is tone mapped by the worker that runs it, on its graphics card if it has validated it, otherwise on the processor. If a playback moves from one worker to another with a different capability, the picture may change slightly from that point (colours and highlights), as it already does when a playback moves to the server.
+
+HDR conversions are heavy: a PC with a graphics card helps a lot.
 
 ### 7.4 What if a PC is switched off during a conversion?
 

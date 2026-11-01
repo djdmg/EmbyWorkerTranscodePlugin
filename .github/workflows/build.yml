@@ -34,7 +34,8 @@ jobs:
         shell: pwsh
         run: ./tools/fetch-emby-assemblies.ps1 -EmbyVersion $env:EMBY_VERSION
 
-      # FFmpeg bundled with the worker (downloaded and checked by package-worker.ps1).
+      # FFmpeg bundled with the worker ("full" build of gyan.dev, with libplacebo; downloaded and checked by
+      # package-worker.ps1). The key follows that script, so a new build or checksum gets a new cache.
       - name: Cache FFmpeg
         uses: actions/cache@v4
         with:

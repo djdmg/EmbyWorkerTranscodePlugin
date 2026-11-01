@@ -19,7 +19,7 @@ arguments copiés des vraies commandes d'Emby 4.10. Rapport : `C:\emby\docs\03-t
 ## Prérequis
 
 * .NET 8 SDK (`C:\Program Files\dotnet\dotnet.exe`) et le `nuget.config` local de `C:\emby`.
-* ffmpeg du worker : `C:\emby\artifacts\worker\EmbyRemoteWorker\ffmpeg\ffmpeg.exe` (9.0.2, génération des médias
+* ffmpeg du worker : le build « full » 9.0.2 (libplacebo, celui du worker 0.7.15) : celui de winget s'il est « full », sinon `C:\emby\wip\gputonemap\ffmpeg-full\...\ffmpeg.exe`, sinon `C:\emby\artifacts\worker\EmbyRemoteWorker\ffmpeg\ffmpeg.exe` (génération des médias
   et encodage sur les workers de test).
 * ffmpeg/ffprobe « serveur » : build amont Gyan 9.0.2 installé par winget
   (`%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg*\...\bin`), en remplacement du ffmpeg modifié d'Emby.
@@ -117,7 +117,7 @@ n'influence les autres scénarios. La jonction serveur (run sans `-ss`) → work
 | `tests-localfirst.ps1` | Les tests LF du démarrage rapide (relais `shim-localfirst` + faux ffmpeg d'Emby) |
 | `fake-emby-ffmpeg\` | Faux ffmpeg d'Emby (projet .NET 8 autonome, aucune dépendance à `src`) |
 | `run-tests.ps1` | Mise en place du banc, exécution, arrêt, tableau de résultats |
-| `tests-sleep.ps1` | T13 : mise en veille simulée d'un worker (processus gelés 40 s) pendant une lecture et une conversion ; T14–T19 (conversions : worker en échec, serveur en parallèle d'un worker, audio à l'avance, serveur d'abord, HDR, serveur seul) ; T20 : source AV1 10 bits à départ vidéo de 7 ms (`media\film_av1_10bit.mkv`, générée au premier lancement), w1 (logiciel puis GPU) + serveur, nombre d'images de la sortie et durée listée contre durée réelle de chaque morceau (dossier de travail copié dans `out\spool-t20x`, table `chunks-measured.csv`) |
+| `tests-sleep.ps1` | T13 : mise en veille simulée d'un worker (processus gelés 40 s) pendant une lecture et une conversion ; T14–T19 (conversions : worker en échec, serveur en parallèle d'un worker, audio à l'avance, serveur d'abord, HDR, serveur seul) ; T20 : source AV1 10 bits à départ vidéo de 7 ms (`media\film_av1_10bit.mkv`, générée au premier lancement), w1 (logiciel puis GPU) + serveur, nombre d'images de la sortie et durée listée contre durée réelle de chaque morceau (dossier de travail copié dans `out\spool-t20x`, table `chunks-measured.csv`) ; T21 : conversion HDR tone mappée sur le GPU (libplacebo) par w1 seul, graphes envoyés, device Vulkan, aucune tranche sur le serveur, nombre d'images |
 | `00-gen-media.ps1` | Médias de test : H.264 1080p 150 s (2 pistes audio fre 440 Hz / eng 880 Hz, sous-titres SRT intégrés + `.srt` externe), HEVC 10 bits HDR10 (BT.2020/PQ) 120 s, police |
 | `smoke.ps1` / `cleanup.ps1` | Vérification rapide / nettoyage |
 

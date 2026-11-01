@@ -349,6 +349,7 @@ Onglet « Paramètres ». Cliquez sur « Enregistrer » pour appliquer, « Annul
 | « Conversions : encodage par le GPU » | désactivé | Plus rapide. Si une tranche est ensuite reprise par le serveur, un même fichier mélange deux encodeurs (voir les limites). |
 | « Lectures : encodage par le GPU » | désactivé | Bien plus rapide sur un portable. L'image du worker et celle du serveur diffèrent un peu. Désactivé = même encodeur que le serveur, donc bascules invisibles. |
 | « Décodage vidéo par le GPU quand l'encodage s'y fait » | activé | Soulage le processeur ; image identique. Ne sert que si l'une des deux options précédentes est cochée. Repli automatique sur le processeur si besoin. |
+| « HDR → SDR (tone mapping) par le GPU quand il a été validé au démarrage » | activé | Bien plus rapide et soulage le processeur (voir 7.3). Décoché : le worker ne reçoit plus de conversion tone mappée sur le GPU et fait le tone mapping des lectures sur le processeur. Le changement reconnecte le worker. |
 | « Tâches simultanées maximum » | 2 | Une conversion n'occupe qu'un emplacement libre. |
 | « Refaire la détection du matériel » | — | Teste de nouveau les encodeurs, par exemple après une mise à jour de pilote. |
 | « Manuel » / « Automatique » (mode de disponibilité) | Manuel, 10 min | Voir 6.4. |
@@ -400,7 +401,18 @@ Une conversion est acceptée dès qu'un worker capable est connecté **ou** que 
 
 ### 7.3 HDR vers SDR
 
-Quand Emby convertit un film HDR en SDR, la conversion des couleurs se fait avec des filtres FFmpeg standard, de la même façon sur les workers et sur le serveur : toutes les tranches ont le même rendu. Si le serveur ne sait pas le faire, il laisse ces tranches aux workers. Les conversions HDR sont lourdes : un PC avec carte graphique aide beaucoup.
+Quand Emby convertit un film HDR en SDR, la conversion des couleurs (tone mapping) se fait avec des filtres FFmpeg standard, de l'une de deux façons :
+
+- **Sur la carte graphique** (plugin 0.7.26 et worker 0.7.15 ou plus récents) : libplacebo, 2 à 2,4 fois plus rapide, avec environ 8 % du processeur au lieu d'environ 50 %. Chaque worker vérifie au démarrage que sa carte graphique donne la bonne image (il la compare à celle du processeur ; certains pilotes rendent une image corrompue sans aucune erreur, le worker réessaie alors avec des options plus sûres ou s'en passe). La fenêtre du worker affiche « HDR → SDR : GPU (libplacebo) » quand c'est validé.
+- **Sur le processeur** (zscale + tonemap) : tous les workers, et le serveur.
+
+Le choix est fait **une fois par conversion**, quand Emby la lance : sur la carte graphique si au moins un worker connecté l'a validé, sinon sur le processeur. Toutes les tranches de l'épisode utilisent ensuite la même méthode, pour que tout le fichier ait le même rendu : une conversion sur la carte graphique n'est confiée qu'aux workers qui savent la faire (jamais au serveur), et si aucun n'est connecté pendant 30 minutes elle est rendue à Emby. Une conversion sur le processeur peut toujours aller à n'importe quel worker et au serveur.
+
+Un worker dont le tone mapping par la carte graphique échoue trois fois cesse de l'utiliser jusqu'à son redémarrage (les lectures repassent sur le processeur ; les conversions sur la carte graphique vont aux autres workers). Pour le désactiver durablement, décocher « HDR → SDR (tone mapping) par le GPU… » dans les paramètres du worker (6.5).
+
+Une lecture est tone mappée par le worker qui la fait, sur sa carte graphique s'il l'a validée, sinon sur le processeur. Si une lecture passe d'un worker à un autre de capacité différente, l'image peut changer légèrement à partir de ce moment (couleurs, hautes lumières), comme c'est déjà le cas quand une lecture passe sur le serveur.
+
+Les conversions HDR sont lourdes : un PC avec carte graphique aide beaucoup.
 
 ### 7.4 Et si un PC s'éteint pendant une conversion ?
 

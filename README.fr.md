@@ -47,7 +47,7 @@ Garde-fous : auto-test du relais au démarrage d'Emby, coupe-circuit (fichier `d
 
 1. La source est découpée en **tranches** d'environ 2 minutes, plus courtes à la fin (60, 60, 30, 30 s). Chaque borne est posée exactement sur une image, lue par ffprobe : aucune image perdue ni doublée. Exception : une source dont les paquets n'ont pas d'horodatage d'affichage (AVI DivX/Xvid à images B empaquetées) n'est pas découpée, car des exécutions qui s'y positionnent ne se rejoignent pas sur la même image ; elle est convertie en une seule tranche.
    - Une conversion est **acceptée dès qu'un worker capable est connecté ou que le serveur sait encoder ses tranches** : le serveur commence seul si besoin, et toutes les 10 s les tranches en attente sont de nouveau proposées aux workers ; un PC allumé en cours d'épisode y participe aussitôt. Emby ne convertit lui-même, comme sans plugin, que si ni les workers ni le serveur ne peuvent encoder les tranches.
-   - HDR → SDR : le filtre `supertonemap` d'Emby est traduit en filtres standard (`zscale` + `tonemap`), de la même façon sur les workers et sur le serveur.
+   - HDR → SDR : le filtre `supertonemap` d'Emby est traduit en filtres standard. Depuis le plugin 0.7.26 et le worker 0.7.15, quand un worker connecté a validé le **tone mapping par le GPU** (libplacebo via Vulkan, 2 à 2,4 fois plus rapide, environ 8 % de processeur au lieu d'environ 50 %), le coordinateur le choisit à la capture de la conversion et le fige pour tout l'épisode : seuls les workers qui ont cette capacité en prennent les tranches (jamais le serveur, dont le ffmpeg n'a pas libplacebo), et si aucun n'est connecté pendant `EncodeNoWorkerMinutes` la conversion est rendue à Emby. Sinon `zscale` + `tonemap` sur le processeur, de la même façon sur les workers et sur le serveur. Les deux ne sont jamais mélangés dans un même fichier. Le worker valide l'image du GPU au démarrage contre celle du processeur (PSNR), car certains pilotes (iGPU Intel) rendent une image corrompue sans aucune erreur.
    - Les **remux** (vidéo recopiée, seul l'audio converti) restent sur le serveur : il n'y a rien à calculer, et le transfert vers un worker coûterait plus que le remux. Avec le réglage d'Emby « conversion à pleine vitesse » (`EnableFullSpeedTranscoding`), ils prennent quelques minutes au lieu du temps réel.
 2. Chaque worker disponible prend **une tranche à la fois**. Pendant qu'il l'encode, la **tranche suivante lui est réservée** et ses données sont **préchargées** dans son cache. Environ 6 s avant la fin de sa tranche, il reçoit la suivante et **lance déjà son ffmpeg** (`EncodeOverlapSeconds`) : le démarrage (environ 4 s) ne laisse pas l'encodeur inactif.
    - Le **serveur encode aussi des tranches en parallèle** des workers (`EncodeLocalAlongsideWorkers`), une à la fois, jamais une tranche réservée à un worker. Il ne passe sa tranche à un worker libre qu'une fois qu'il ne reste plus rien en attente.
@@ -101,7 +101,7 @@ dotnet test  src\RemoteTranscode.Tests -c Release
 # Plugin Emby (relais publié pour chaque plateforme, compressé et embarqué)
 pwsh tools\build-plugin.ps1                # -> artifacts\plugin\RemoteTranscode.EmbyPlugin.dll
 
-# Worker Windows, avec FFmpeg 9.0.2 « essentials » de gyan.dev, vérifié par SHA-256
+# Worker Windows, avec FFmpeg 9.0.2 « full » de gyan.dev (libplacebo pour le tone mapping GPU), vérifié par SHA-256
 pwsh tools\package-worker.ps1              # -> artifacts\worker-package\EmbyRemoteWorker\ et .zip
 pwsh tools\build-installer.ps1             # -> artifacts\installer\EmbyRemoteWorker-Setup-<version>.exe
 ```
@@ -118,8 +118,8 @@ Les versions se règlent dans `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.Em
 
 | Élément | Version |
 |---|---|
-| Plugin | 0.7.25 |
-| Worker et installeur | 0.7.14, avec icône et décodage par le GPU (les workers 0.7.7 à 0.7.13 restent compatibles : 0.7.9 n'affiche le compteur de la file d'Emby que pendant une tâche, 0.7.7 et 0.7.8 ne l'affichent pas, 0.7.7 sans l'avancement des conversions) |
+| Plugin | 0.7.26 |
+| Worker et installeur | 0.7.15, avec icône, décodage et tone mapping par le GPU (build FFmpeg « full » : installeur d'environ 218 Mo au lieu de 170 Mo). Les workers 0.7.7 à 0.7.14 restent compatibles mais font le tone mapping sur le processeur et ne reçoivent jamais de conversion tone mappée sur le GPU (en outre : 0.7.9 n'affiche le compteur de la file d'Emby que pendant une tâche, 0.7.7 et 0.7.8 ne l'affichent pas, 0.7.7 sans l'avancement des conversions) |
 | Emby Server testé | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 sans GPU) ; ffmpeg d'Emby 5.1 (fork) |
 | Client testé | Emby Web dans Chrome (lecteur hls.js 1.6.0-beta.2) |
 | Workers testés | Windows 11 Entreprise, Intel Core Ultra 5 225U (x264 et QSV) ; PC avec RTX 4080 (x264 et NVENC, environ 10x sur un épisode 1080p) ; FFmpeg 9.0.2 |

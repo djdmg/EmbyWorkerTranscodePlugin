@@ -48,6 +48,21 @@ public sealed class JobRunner
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> SuspendedDecoders = new(StringComparer.Ordinal);
     private const int SuspendAfterFailures = 3;
 
+    // Jobs whose GPU tone mapping (libplacebo) failed since the worker started: playback that then worked tone mapped on
+    // the CPU, conversion slices that failed with a Vulkan/libplacebo error. After SuspendAfterFailures of them, GPU tone
+    // mapping is no longer used until the next start: playback is tone mapped on the CPU and conversions tone mapped on
+    // the GPU are refused (the coordinator places them on another worker, or gives the conversion back to Emby).
+    private static int toneMappingFailures;
+
+    /// <summary>GPU tone mapping suspended after repeated failures (see <see cref="SuspendAfterFailures"/>).</summary>
+    public static bool GpuToneMappingSuspended => Volatile.Read(ref toneMappingFailures) >= SuspendAfterFailures;
+
+    private void CountToneMappingFailure()
+    {
+        if (Interlocked.Increment(ref toneMappingFailures) == SuspendAfterFailures)
+            log($"tone mapping GPU suspendu jusqu'au prochain démarrage du worker ({SuspendAfterFailures} échecs)");
+    }
+
     /// <summary>Without a single delivery for this long, the job is released so the coordinator resumes it elsewhere.</summary>
     private static readonly TimeSpan UploadGiveUp = TimeSpan.FromSeconds(20);
     private const string UploadReleaseReason = "released: envoi des segments impossible";
@@ -136,6 +151,8 @@ public sealed class JobRunner
             // GPU decoding is dropped for this job if ffmpeg failed with it before anything was produced (see below).
             string? failedDecoder = null;
             bool softwareDecoding = false;
+            // Likewise for GPU tone mapping chosen by this worker (playback only: a conversion's graph is the coordinator's).
+            bool cpuToneMapping = false;
             while (true)
             {
                 var command = WorkerCommandBuilder.Build(offer.Args, new WorkerCommandContext
@@ -156,9 +173,11 @@ public sealed class JobRunner
                     HardwareDecoders = config.HardwareDecoding && !softwareDecoding
                         ? capabilities.HwDecoders.Where(d => SuspendedDecoders.GetValueOrDefault(d) < SuspendAfterFailures).ToArray()
                         : [],
+                    GpuToneMapping = cpuToneMapping || GpuToneMappingSuspended ? null : capabilities.GpuToneMapping,
                 });
                 Encoder = command.VideoEncoder;
-                log($"job {offer.JobId}: start at segment {offer.StartIndex}, encoder {command.VideoEncoder}, decoding {command.HardwareDecoder ?? "software"}");
+                log($"job {offer.JobId}: start at segment {offer.StartIndex}, encoder {command.VideoEncoder}, decoding {command.HardwareDecoder ?? "software"}" +
+                    (command.GpuToneMapped ? ", tone mapping GPU" : ""));
                 log($"job {offer.JobId}: ffmpeg {Mask(string.Join(' ', command.Args.Select(Quote)))}");
 
                 var psi = new ProcessStartInfo(config.ResolvedFfmpegPath ?? config.FfmpegPath)
@@ -206,10 +225,34 @@ public sealed class JobRunner
                     continue;
                 }
 
-                // The software rerun worked: the hardware decoder was the cause. Repeated, it is suspended.
-                if (failedDecoder != null && stopReason is null && process.ExitCode == 0
+                // Playback tone mapped on the GPU by this worker's choice: rerun with the CPU chain (same frames and
+                // timestamps, a slightly different rendering). A conversion never is (its slices must all look alike).
+                if (stopReason is null && process.ExitCode != 0 && command.ToneMappedHere && uploadedLines == 0 && !cpuToneMapping)
+                {
+                    log($"job {offer.JobId}: échec de FFmpeg avec le tone mapping GPU, nouvel essai avec le tone mapping par le processeur");
+                    cpuToneMapping = true;
+                    DeleteOutput(command.SegmentListFile);
+                    lock (stderrTail)
+                        stderrTail.Clear();
+                    continue;
+                }
+
+                // The rerun worked: what it dropped last was the cause. Repeated, it is suspended.
+                if (cpuToneMapping && stopReason is null && process.ExitCode == 0)
+                    CountToneMappingFailure();
+                else if (failedDecoder != null && stopReason is null && process.ExitCode == 0
                     && SuspendedDecoders.AddOrUpdate(failedDecoder, 1, (_, n) => n + 1) == SuspendAfterFailures)
                     log($"décodage matériel {failedDecoder} suspendu jusqu'au prochain démarrage du worker ({SuspendAfterFailures} échecs)");
+                // A conversion slice tone mapped on the GPU that failed on a Vulkan/libplacebo error before producing anything.
+                if (stopReason is null && process.ExitCode != 0 && command.GpuToneMapped && !command.ToneMappedHere && uploadedLines == 0)
+                {
+                    bool gpuError;
+                    lock (stderrTail)
+                        gpuError = stderrTail.Any(l => System.Text.RegularExpressions.Regex.IsMatch(l, "vulkan|libplacebo|hwupload|hwdownload|hw_device",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+                    if (gpuError)
+                        CountToneMappingFailure();
+                }
 
                 // A deliberate stop ("q" or kill) is not an ffmpeg failure, whatever exit code it produced.
                 exitCode = stopReason != null ? 0 : process.ExitCode;

@@ -1,7 +1,12 @@
 namespace RemoteTranscode.Common;
 
-/// <summary>What a job needs from a worker: the output video encoder Emby asked for and the filters of its graphs.</summary>
-public sealed record JobRequirements(string VideoEncoder, string[] Filters);
+/// <summary>
+/// What a job needs from a worker: the output video encoder Emby asked for and the filters of its graphs.
+/// <paramref name="ToneMapping"/>: how Emby's HDR→SDR filter is translated, chosen once per conversion by the
+/// coordinator (<see cref="ToneMapper.Libplacebo"/> only for workers with that capability, never the server); playback
+/// keeps <see cref="ToneMapper.Zscale"/> here, each worker choosing for itself.
+/// </summary>
+public sealed record JobRequirements(string VideoEncoder, string[] Filters, ToneMapper ToneMapping = ToneMapper.Zscale);
 
 /// <summary>Decides whether a worker can run a job and how well suited it is.</summary>
 public static class WorkerMatching
@@ -14,9 +19,24 @@ public static class WorkerMatching
     {
         if (!CanEncode(job.VideoEncoder, worker.VideoEncoders))
             return $"encodeur {job.VideoEncoder} indisponible";
+        // A conversion tone mapped on the GPU goes to workers that validated it only (the server never has it).
+        if (job.ToneMapping == ToneMapper.Libplacebo && EmbyFilters.NeedsToneMapping(job.Filters) && worker.GpuToneMapping?.IsLibplacebo != true)
+            return "tone mapping GPU (libplacebo) indisponible";
         // Emby-only filters (supertonemap...) are translated on the worker into standard ones.
-        var missing = EmbyFilters.ExpandRequirements(job.Filters).Where(f => !worker.Filters.Contains(f)).ToArray();
+        var missing = EmbyFilters.ExpandRequirements(job.Filters, job.ToneMapping).Where(f => !worker.Filters.Contains(f)).ToArray();
         return missing.Length > 0 ? $"filtres manquants : {string.Join(", ", missing)}" : null;
+    }
+
+    /// <summary>
+    /// The tone mapper a new conversion is frozen with: libplacebo when Emby asks for HDR→SDR and at least one of the
+    /// given (connected) workers can run the conversion that way, zscale otherwise. Every slice then uses the same one.
+    /// </summary>
+    public static JobRequirements WithToneMapping(JobRequirements job, IEnumerable<WorkerCapabilities> connected)
+    {
+        if (!EmbyFilters.NeedsToneMapping(job.Filters))
+            return job with { ToneMapping = ToneMapper.Zscale };
+        var gpu = job with { ToneMapping = ToneMapper.Libplacebo };
+        return connected.Any(c => Incompatibility(gpu, c) is null) ? gpu : job with { ToneMapping = ToneMapper.Zscale };
     }
 
     /// <summary>The software encoder itself, or one of its validated hardware equivalents.</summary>

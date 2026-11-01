@@ -19,7 +19,7 @@ arguments copied from real Emby 4.10 commands. Report: `C:\emby\docs\03-tests-ac
 ## Prerequisites
 
 * .NET 8 SDK (`C:\Program Files\dotnet\dotnet.exe`) and the local `nuget.config` of `C:\emby`.
-* Worker ffmpeg: `C:\emby\artifacts\worker\EmbyRemoteWorker\ffmpeg\ffmpeg.exe` (9.0.2, media generation
+* Worker ffmpeg: the "full" 9.0.2 build (libplacebo, as bundled with worker 0.7.15): winget's if it is the full build, else `C:\emby\wip\gputonemap\ffmpeg-full\...\ffmpeg.exe`, else `C:\emby\artifacts\worker\EmbyRemoteWorker\ffmpeg\ffmpeg.exe` (media generation
   and encoding on the test workers).
 * "Server" ffmpeg/ffprobe: upstream Gyan 9.0.2 build installed by winget
   (`%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg*\...\bin`), replacing Emby's modified ffmpeg.
@@ -117,7 +117,7 @@ from influencing the other scenarios. The server (run without `-ss`) → worker 
 | `tests-localfirst.ps1` | The fast-start LF tests (`shim-localfirst` relay + fake Emby ffmpeg) |
 | `fake-emby-ffmpeg\` | Fake Emby ffmpeg (standalone .NET 8 project, no dependency on `src`) |
 | `run-tests.ps1` | Bench setup, execution, shutdown, results table |
-| `tests-sleep.ps1` | T13: simulated sleep of a worker (processes frozen for 40 s) during a playback and a conversion; T14–T19 (conversions: failing worker, server alongside a worker, audio ahead, server first, HDR, server alone); T20: AV1 10-bit source with a 7 ms video start time (`media\film_av1_10bit.mkv`, generated on first use), w1 (software, then GPU) + server, frame count of the output and listed vs real duration of every chunk (spool copied to `out\spool-t20x`, table `chunks-measured.csv`) |
+| `tests-sleep.ps1` | T13: simulated sleep of a worker (processes frozen for 40 s) during a playback and a conversion; T14–T19 (conversions: failing worker, server alongside a worker, audio ahead, server first, HDR, server alone); T20: AV1 10-bit source with a 7 ms video start time (`media\film_av1_10bit.mkv`, generated on first use), w1 (software, then GPU) + server, frame count of the output and listed vs real duration of every chunk (spool copied to `out\spool-t20x`, table `chunks-measured.csv`); T21: HDR conversion tone mapped on the GPU (libplacebo) by w1 alone, graphs sent, Vulkan device, no slice on the server, frame count |
 | `00-gen-media.ps1` | Test media: H.264 1080p 150 s (2 audio tracks fre 440 Hz / eng 880 Hz, embedded SRT subtitles + external `.srt`), 10-bit HEVC HDR10 (BT.2020/PQ) 120 s, font |
 | `smoke.ps1` / `cleanup.ps1` | Quick check / cleanup |
 

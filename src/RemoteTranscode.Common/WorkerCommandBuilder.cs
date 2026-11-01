@@ -40,10 +40,21 @@ public sealed class WorkerCommandContext
     /// when GPU decoding is switched off. Used only when the chosen encoder is a hardware one (see <see cref="HardwareDecoding"/>).
     /// </summary>
     public IReadOnlyCollection<string> HardwareDecoders { get; init; } = [];
+
+    /// <summary>
+    /// GPU tone mapping validated on this worker (<see cref="WorkerCapabilities.GpuToneMapping"/>); null when there is
+    /// none, when it is switched off or suspended after failures. With it, Emby's supertonemap left in a template
+    /// (playback) is translated with libplacebo; and any graph using libplacebo (conversions, translated by the
+    /// coordinator) gets its Vulkan device.
+    /// </summary>
+    public GpuToneMapping? GpuToneMapping { get; init; }
 }
 
 /// <param name="HardwareDecoder">Hardware decoder used for the video input ("nvenc/hevc"), null for software decoding.</param>
-public sealed record WorkerCommand(string[] Args, string VideoEncoder, string SegmentListFile, string SegmentPattern, string? HardwareDecoder = null);
+/// <param name="GpuToneMapped">The filter graph tone maps on the GPU (libplacebo).</param>
+/// <param name="ToneMappedHere">This worker chose libplacebo itself (playback); false when the coordinator did (conversion).</param>
+public sealed record WorkerCommand(string[] Args, string VideoEncoder, string SegmentListFile, string SegmentPattern, string? HardwareDecoder = null,
+    bool GpuToneMapped = false, bool ToneMappedHere = false);
 
 /// <summary>
 /// Builds the final ffmpeg command on the worker from a validated job template: placeholders become HTTPS
@@ -85,6 +96,7 @@ public static partial class WorkerCommandBuilder
         // "level+info" prefixes each stderr line with [error]/[fatal]... (JobRunner surfaces those); progress goes to
         // stdout as key=value blocks once a second.
         var args = new List<string> { "-hide_banner", "-loglevel", "level+info", "-nostats", "-progress", "pipe:1", "-stats_period", "1" };
+        int globalOptionsAt = args.Count;
         string encoder = ChooseEncoder(template, ctx);
         // GPU decoding goes with GPU encoding only, and only on the video input (never a subtitle or attachment input).
         var (videoInput, decoder) = HardwareDecoding.VideoInput(template);
@@ -96,6 +108,9 @@ public static partial class WorkerCommandBuilder
         string? maxrate = null;
         string? bufsize = null;
         string? crf = null;
+        // Playback templates still carry Emby's supertonemap: translated here, on the GPU when this worker validated it.
+        var toneMapper = ctx.GpuToneMapping?.IsLibplacebo == true ? ToneMapper.Libplacebo : ToneMapper.Zscale;
+        bool gpuToneMapped = false, toneMappedHere = false;
 
         for (int i = 0; i < template.Count; i++)
         {
@@ -148,7 +163,14 @@ public static partial class WorkerCommandBuilder
             if (name is "-filter_complex" or "-filter" or "-vf" or "-af")
             {
                 args.Add(a);
-                args.Add(EmbyFilters.Translate(PlaceholderInText().Replace(value!, m => LocalReference(m, ctx))));
+                string graph = PlaceholderInText().Replace(value!, m => LocalReference(m, ctx));
+                string translated = EmbyFilters.Translate(graph, toneMapper);
+                if (EmbyFilters.UsesLibplacebo(translated))
+                {
+                    gpuToneMapped = true;
+                    toneMappedHere |= translated != graph;
+                }
+                args.Add(translated);
                 i++;
                 continue;
             }
@@ -182,7 +204,16 @@ public static partial class WorkerCommandBuilder
             args.InsertRange(videoCodecAt + 2, HardwareRateControl(encoder, videoCodecOption, maxrate, quality, ctx.SegmentSeconds));
         }
 
-        return new WorkerCommand(args.ToArray(), encoder, SegmentListFile, SegmentPattern, hardwareDecoder);
+        // libplacebo runs on the Vulkan device the capability probe validated (with the options some drivers need), named
+        // for the filters; global options, so before the first input.
+        if (gpuToneMapped)
+        {
+            if (ctx.GpuToneMapping?.IsLibplacebo != true)
+                throw new InvalidOperationException("graph tone mapped with libplacebo but GPU tone mapping is unavailable on this worker");
+            args.InsertRange(globalOptionsAt, ["-init_hw_device", ctx.GpuToneMapping.Device, "-filter_hw_device", EmbyFilters.VulkanDevice]);
+        }
+
+        return new WorkerCommand(args.ToArray(), encoder, SegmentListFile, SegmentPattern, hardwareDecoder, gpuToneMapped, toneMappedHere);
     }
 
     /// <summary>

@@ -38,6 +38,8 @@ public static partial class ArgTemplateValidator
         "setpts", "trim", "atrim", "split", "asplit", "copy", "tpad", "apad", "deinterlace_vaapi", "scale_cuda",
         "scale_qsv", "vpp_qsv", "tonemap_opencl", "hwmap", "colorspace", "loudnorm", "aformat", "amix", "afade",
         "fade", "rotate", "settb", "asettb", "showinfo", "unsharp", "framerate", "minterpolate",
+        // GPU tone mapping of conversions translated by the coordinator (0.7.26); its shader options are refused below.
+        "libplacebo",
     };
 
     // Values that would point at a file or URL; they are only legal as placeholders.
@@ -173,6 +175,12 @@ public static partial class ArgTemplateValidator
         "filename", "fontsdir", "file", "textfile", "fontfile", "stats_file", "model",
     };
 
+    // Filter options never accepted, even with a placeholder: libplacebo's user shaders (code run on the GPU).
+    private static readonly HashSet<string> ForbiddenFilterKeys = new(StringComparer.Ordinal)
+    {
+        "custom_shader_path", "custom_shader_bin",
+    };
+
     /// <summary>
     /// Parses the graph the way ffmpeg does (chains split by ';', filters by ',', [labels], name '=' arguments, then
     /// arguments split by ':' with quotes and '\' escapes at both levels, whitespace trimmed), then requires every
@@ -205,6 +213,11 @@ public static partial class ArgTemplateValidator
             bool fileFilter = FileFilters.Contains(name);
             foreach (var (key, value) in options)
             {
+                if (key != null && ForbiddenFilterKeys.Contains(key))
+                {
+                    error = $"filter {name} option {key} is not allowed";
+                    return false;
+                }
                 bool isPlaceholder = MaskedPlaceholder().IsMatch(value);
                 bool isFile = key is null ? fileFilter : FilterFileKeys.Contains(key) || (fileFilter && key == "f");
                 if (isFile && !isPlaceholder)

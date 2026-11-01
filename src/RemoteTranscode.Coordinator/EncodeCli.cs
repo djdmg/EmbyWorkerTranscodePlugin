@@ -36,6 +36,8 @@ public static class EncodeCli
             s.Speed,
         }).ToList(),
         t.Attempts,
+        // HDR → SDR of the whole conversion ("Libplacebo": capable workers only, "Zscale"); null without HDR.
+        ToneMapping = Common.EmbyFilters.NeedsToneMapping(t.Requirements.Filters) ? t.Requirements.ToneMapping.ToString() : null,
         t.Audio,
         t.Note,
         t.Error,

@@ -48,6 +48,13 @@ public sealed class WorkerConfig
     /// mapping, scaling, subtitles). Only codecs validated at start-up; pictures are identical to software decoding.
     /// </summary>
     public bool HardwareDecoding { get; set; } = true;
+
+    /// <summary>
+    /// HDR → SDR tone mapping on the GPU (libplacebo, on by default) when the start-up probe validated it: 2 to 2.4 times
+    /// faster with a fraction of the CPU. Off: not announced to the coordinator (no conversion tone mapped on the GPU is
+    /// sent here) and playback is tone mapped on the CPU. A change reconnects the worker.
+    /// </summary>
+    public bool GpuToneMapping { get; set; } = true;
     public AvailabilitySettings Availability { get; set; } = new();
 
     /// <summary>Configuration, logs and caches. EMBY_WORKER_HOME overrides it (several workers on one PC for tests).</summary>

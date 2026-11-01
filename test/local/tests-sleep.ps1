@@ -491,3 +491,38 @@ function T20 {
     Set-TestWorkerConfig 'w1' @{ HardwareEncodingForConversions = $false }
     Ensure-Workers @('w1', 'w2')
 }
+
+# Conversion HDR avec le tone mapping sur le GPU (plugin 0.7.26, worker 0.7.15) : w1 seul connecté, avec le ffmpeg
+# « full » (libplacebo) et la capacité validée au démarrage. Le coordinateur fige la conversion en mode libplacebo :
+# toutes les tranches vont à w1 (jamais au serveur, dont le ffmpeg n'a pas la capacité), chaque graphe envoyé contient
+# libplacebo et aucun zscale, et la commande de w1 nomme le device Vulkan validé. Sortie contrôlée à l'image près.
+#   pwsh -File run-tests.ps1 -Only T21
+function T21 {
+    Ensure-Workers @('w1') -Only
+    $wlog = WorkerLog 'w1'
+    $cap = Log-Excerpt $wlog 'tone mapping GPU validé|capacités reprises du cache' 2
+    # 8 min sans trou de 21 ms à chaque raccord (vidéo et audio bouclés séparément) : film_hdr10_x4.mkv en a trois, que
+    # toute conversion comble par 2 images de plus (12002 au lieu de 12000, avec zscale comme avec libplacebo).
+    $long = Join-Path $Paths.Media 'film_hdr10_x4v.mkv'
+    if (-not (Test-Path $long)) { & $Paths.ServerFfmpeg -v error -y -stream_loop 3 -an -i $HDR -stream_loop 3 -vn -i $HDR -map 0:v -map 1:a -c copy $long }
+    $out = Join-Path $Paths.Out 'conv-t21.mp4'
+    $s = Start-Shim (New-ConversionArgs -InputPath $long -OutputPath $out -Hdr) 't21'
+    $code = Wait-Exit $s 1800
+    $r = Get-ConversionRunners $out
+    $mode = Prop $r.Summary 'ToneMapping'
+    $jobs = @(Select-String -Path (Join-Path $Paths.Logs 'coordinator.log') -Pattern "Background job (\w+) running on (\S+) \(start segment \d+, conversion $($r.Id) " -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Matches[0].Groups[1].Value })
+    $lines = @($jobs | ForEach-Object { Log-Excerpt $wlog "job $_`: ffmpeg " 1 })
+    $gpuLines = @($lines | Where-Object { $_ -match 'libplacebo@\S*=tonemapping=[\w.]+:peak_detect=0' -and $_ -match '-init_hw_device vulkan=vk' -and $_ -notmatch 'zscale@' })
+    $device = if ($lines) { ([regex]::Match($lines[0], '-init_hw_device (\S+)')).Groups[1].Value } else { '' }
+    $src = Measure-Video $long
+    $dst = Measure-Video $out
+    $verify = Log-Excerpt 'shim-t21' 'source .*sultat|rejet' 1
+    $chk = Check-Output $out (Probe $long).Duration 1
+    $ok = $code -eq 0 -and $mode -eq 'Libplacebo' -and $r.LocalRuns -eq 0 -and ($r.Workers -join ',') -eq 'w1' -and $jobs.Count -gt 1 `
+        -and $gpuLines.Count -eq $jobs.Count -and $src.Frames -eq $dst.Frames -and (Prop $r.Summary 'Status') -eq 'Completed' `
+        -and ($verify -join ' ') -match 'sultat' -and ($verify -join ' ') -notmatch 'rejet' -and $chk.Ok
+    Add-Result 'T21' 'Conversion HDR tone mappée sur le GPU (libplacebo) par w1' $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+        "capacité de w1 : « $($cap -join ' / ') » | mode : $mode | runs de w1 : $($jobs.Count), dont graphe libplacebo + device Vulkan : $($gpuLines.Count) ($device) | tranches sur le serveur : $($r.LocalRuns), workers : $($r.Workers -join ', ') | images source/sortie : $($src.Frames)/$($dst.Frames) | final : $(Prop $r.Summary 'Status') | contrôle : « $($verify -join ' / ') » | code $code | $($chk.Text)")
+    Ensure-Workers @('w1', 'w2')
+}

@@ -33,6 +33,7 @@ public sealed class MainForm : Form
     private readonly CheckBox hwBox = new() { Text = "Conversions : encodage par le GPU (plus rapide ; une reprise sur le serveur mélangerait deux encodeurs)", AutoSize = true };
     private readonly CheckBox hwPlaybackBox = new() { Text = "Lectures : encodage par le GPU (bien plus rapide sur un portable ; image du worker et du serveur un peu différentes)", AutoSize = true };
     private readonly CheckBox hwDecodeBox = new() { Text = "Décodage vidéo par le GPU quand l'encodage s'y fait (soulage le processeur ; image identique)", AutoSize = true };
+    private readonly CheckBox gpuToneMapBox = new() { Text = "HDR → SDR (tone mapping) par le GPU quand il a été validé au démarrage (bien plus rapide, soulage le processeur)", AutoSize = true };
     private readonly NumericUpDown maxJobsBox = new() { Minimum = 1, Maximum = 16, Width = 60 };
     private readonly RadioButton manualRadio = new() { Text = "Manuel : je rends le PC disponible", AutoSize = true };
     private readonly RadioButton autoRadio = new() { Text = "Automatique : disponible après une inactivité de", AutoSize = true };
@@ -178,7 +179,9 @@ public sealed class MainForm : Form
 
         var caps = host.Capabilities;
         capsLabel.Text = caps is null ? "Capacités : détection en attente" :
-            $"Encodeurs validés : {string.Join(", ", caps.VideoEncoders)}\nGPU : {string.Join("; ", caps.Gpus)}\n{caps.FfmpegVersion}";
+            $"Encodeurs validés : {string.Join(", ", caps.VideoEncoders)}\nGPU : {string.Join("; ", caps.Gpus)}\n" +
+            $"HDR → SDR : {(caps.GpuToneMapping is null ? "processeur (tone mapping GPU non validé)" : host.Config.GpuToneMapping ? "GPU (libplacebo)" : "processeur (GPU désactivé dans les paramètres)")}\n" +
+            caps.FfmpegVersion;
 
         if (enabledBox.Checked != host.Config.Available)
             enabledBox.Checked = host.Config.Available;
@@ -255,6 +258,7 @@ public sealed class MainForm : Form
             Row(hwBox),
             Row(hwPlaybackBox),
             Row(hwDecodeBox),
+            Row(gpuToneMapBox),
             Row("Tâches simultanées maximum :", maxJobsBox),
             Row(redetectButton)));
 
@@ -303,6 +307,7 @@ public sealed class MainForm : Form
         hwBox.Checked = c.HardwareEncodingForConversions;
         hwPlaybackBox.Checked = c.HardwareEncodingForPlayback;
         hwDecodeBox.Checked = c.HardwareDecoding;
+        gpuToneMapBox.Checked = c.GpuToneMapping;
         maxJobsBox.Value = Math.Clamp(c.MaxJobs, 1, 16);
         manualRadio.Checked = a.Mode == AvailabilityMode.Manual;
         autoRadio.Checked = a.Mode == AvailabilityMode.Automatic;
@@ -333,8 +338,10 @@ public sealed class MainForm : Form
         }
         var c = host.Config;
         // The name and capabilities are only sent in the hello, and the ffmpeg path decides the capabilities: those need
-        // a reconnection. Everything else is read live (availability via ApplySettings, MaxJobs and GPU option per use).
-        bool restart = c.FfmpegPath != ffmpegBox.Text.Trim() || c.Name != nameBox.Text.Trim();
+        // a reconnection, as does GPU tone mapping (announced in the hello). Everything else is read live (availability via
+        // ApplySettings, MaxJobs and GPU option per use).
+        bool restart = c.FfmpegPath != ffmpegBox.Text.Trim() || c.Name != nameBox.Text.Trim() || c.GpuToneMapping != gpuToneMapBox.Checked;
+        c.GpuToneMapping = gpuToneMapBox.Checked;
         c.Name = nameBox.Text.Trim().Length > 0 ? nameBox.Text.Trim() : Environment.MachineName;
         c.FfmpegPath = ffmpegBox.Text.Trim();
         c.HardwareEncodingForConversions = hwBox.Checked;

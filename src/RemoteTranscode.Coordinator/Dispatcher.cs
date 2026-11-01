@@ -378,12 +378,15 @@ public sealed class Dispatcher(CoordinatorOptions options, ILogger<Dispatcher> l
     /// A connected worker able to run these requirements, whatever its state now (busy with other applications,
     /// outside its hours, draining): a conversion can wait for it, the server covering meanwhile slice by slice.
     /// </summary>
-    public bool HasWorkerFor(JobRequirements requirements)
+    public bool HasWorkerFor(JobRequirements requirements) =>
+        ConnectedCapabilities().Any(c => WorkerMatching.Incompatibility(requirements, c) is null);
+
+    /// <summary>Capabilities of the workers connected now (whatever their state), as <see cref="HasWorkerFor"/> counts them.</summary>
+    public IReadOnlyList<WorkerCapabilities> ConnectedCapabilities()
     {
         var now = DateTimeOffset.UtcNow;
-        return workers.Values.Any(w => w.IsOpen && w.Hello != null
-            && now - w.LastSeen < TimeSpan.FromSeconds(options.HeartbeatTimeoutSeconds)
-            && WorkerMatching.Incompatibility(requirements, w.Hello.Capabilities) is null);
+        return workers.Values.Where(w => w.IsOpen && w.Hello != null
+            && now - w.LastSeen < TimeSpan.FromSeconds(options.HeartbeatTimeoutSeconds)).Select(w => w.Hello!.Capabilities).ToList();
     }
 
     /// <summary>

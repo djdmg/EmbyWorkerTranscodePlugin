@@ -6,6 +6,25 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.26 et worker 0.7.15 — 01/11/2026
+
+### Ajouté
+
+- **Worker** — Tone mapping HDR → SDR par le GPU : libplacebo via Vulkan, 2 à 2,4 fois plus rapide que la chaîne processeur avec environ 8 % de processeur au lieu d'environ 50 % (HDR10 4K et 1080p, mesuré sur un iGPU Intel), mêmes images et mêmes horodatages. Validé au démarrage par une sonde qui tone mappe un clip PQ généré avec la chaîne exacte des tâches et la compare à la chaîne processeur (PSNR d'au moins 20 dB ; un code de sortie 0 ne suffit pas : le device Vulkan par défaut d'un iGPU Intel rend des images rose/vert sans aucune erreur). Chaque device Vulkan (le GPU des encodeurs d'abord, puis celui par défaut) est essayé tel quel, puis avec `disable_multiplane=1,linear_images=1`, qui corrige Intel. La méthode et le device validés sont annoncés au coordinateur (`WorkerCapabilities.GpuToneMapping`) ; le cache des capacités est renouvelé.
+- **Worker** — Réglage « HDR → SDR (tone mapping) par le GPU quand il a été validé au démarrage » (activé par défaut) ; la fenêtre du worker indique comment le HDR est traité. Après 3 échecs, le tone mapping GPU est suspendu jusqu'au prochain démarrage, comme le décodage par le GPU : une lecture repasse aussitôt sur le processeur (mêmes images), les tranches de conversion tone mappées sur le GPU sont refusées.
+- **Plugin** — Le coordinateur choisit le tone mapper de chaque conversion HDR à sa capture et le fige : libplacebo si au moins un worker connecté peut faire la conversion ainsi, zscale sinon. Il traduit lui-même chaque tranche dans ce mode ; les tranches d'une conversion libplacebo ne vont qu'aux workers qui en ont la capacité, jamais au serveur (le ffmpeg d'Emby n'a pas libplacebo) ; sans aucun de ces workers connecté pendant `EncodeNoWorkerMinutes`, la conversion est rendue à Emby. zscale et libplacebo ne sont jamais mélangés dans un même épisode. L'état indique le `ToneMapping` de la conversion.
+- **Plugin, worker** — Traduction de `supertonemap` en mode libplacebo : `hwupload`, `libplacebo` (`tonemapping` selon l'algorithme d'Emby, `bt2390` → `bt.2390`, par défaut ; `peak_detect=0`, sans quoi la luminosité changerait d'une tranche à l'autre ; `yuv420p` BT.709 en plage limitée), `hwdownload`, `format`. Le worker nomme son device Vulkan validé (`-init_hw_device … -filter_hw_device vk`) avant les entrées. La traduction zscale (`desat=0`) reste le repli.
+- **Worker** — Une lecture est tone mappée par le worker qui la fait, sur son GPU s'il l'a validé. Une lecture qui passe d'un worker à un autre de capacité différente peut changer légèrement de rendu à partir de ce moment.
+- **Installeur** — Le worker embarque désormais le build FFmpeg 9.0.2 « full » de gyan.dev (le build « essentials » n'a pas libplacebo) : installeur de 218 Mo au lieu de 170 Mo.
+
+### Sécurité
+
+- **Worker** — Le contrôle des tâches accepte `libplacebo` mais refuse ses options de shaders utilisateur (`custom_shader_path`, `custom_shader_bin`).
+
+### Banc
+
+- Les workers de test utilisent le build FFmpeg « full ». T21 : conversion HDR par w1 seul, tone mappée sur son GPU (libplacebo dans chaque graphe envoyé, device Vulkan sur la ligne de commande, aucune tranche sur le serveur, nombre d'images identique à la source). 215 tests unitaires.
+
 ## Plugin 0.7.25 — 01/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.25).

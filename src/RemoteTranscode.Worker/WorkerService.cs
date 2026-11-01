@@ -297,6 +297,10 @@ public sealed partial class WorkerService(WorkerConfig config, WorkerCapabilitie
             return "no free slot";
         if (!ArgTemplateValidator.Validate(offer.Args, out string? error))
             return "invalid job: " + error;
+        // A conversion tone mapped on the GPU by the coordinator cannot fall back to the CPU here (its slices must all
+        // look alike): refused when this worker's GPU tone mapping is off or suspended after failures.
+        if (EmbyFilters.UsesLibplacebo(offer.Args) && (capabilities.GpuToneMapping?.IsLibplacebo != true || JobRunner.GpuToneMappingSuspended))
+            return "tone mapping GPU indisponible sur ce worker" + (JobRunner.GpuToneMappingSuspended ? " (suspendu après des échecs)" : "");
         return null;
     }
 

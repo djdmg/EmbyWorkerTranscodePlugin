@@ -49,7 +49,7 @@ Safeguards: relay self-test at Emby startup, kill switch (`disabled` file), allo
 
 1. The source is split into **slices** of about 2 minutes, shorter at the end (60, 60, 30, 30 s). Each boundary is placed exactly on a frame, read by ffprobe: no frame lost or duplicated. Exception: a source whose packets have no presentation timestamps (DivX/Xvid AVI with packed B-frames) is not split, because runs that seek into it do not meet on the same frame; it is converted as a single slice.
    - A conversion is **accepted as soon as a capable worker is connected or the server can encode its slices**: the server starts alone if needed, and every 10 s pending slices are offered to workers again; a PC switched on mid-episode joins in immediately. Emby converts by itself, as without the plugin, only if neither the workers nor the server can encode the slices.
-   - HDR → SDR: Emby's `supertonemap` filter is translated into standard filters (`zscale` + `tonemap`), the same way on workers and on the server.
+   - HDR → SDR: Emby's `supertonemap` filter is translated into standard filters. Since plugin 0.7.26 and worker 0.7.15, when a connected worker has validated **GPU tone mapping** (libplacebo through Vulkan, 2 to 2.4 times faster, about 8 % CPU instead of about 50 %), the coordinator chooses it when the conversion is captured and freezes it for the whole episode: only workers with that capability take its slices (never the server, whose ffmpeg has no libplacebo), and if none is connected for `EncodeNoWorkerMinutes` the conversion is given back to Emby. Otherwise `zscale` + `tonemap` on the processor, the same way on workers and on the server. The two are never mixed in one file. The worker validates the GPU picture at start-up against the processor chain (PSNR), because some drivers (Intel iGPU) return a corrupted picture without any error.
    - **Remuxes** (video copied, only the audio converted) stay on the server: there is nothing to compute, and transferring to a worker would cost more than the remux. With Emby's "full-speed conversion" setting (`EnableFullSpeedTranscoding`), they take a few minutes instead of real time.
 2. Each available worker takes **one slice at a time**. While it encodes it, the **next slice is reserved for it** and its data is **prefetched** into its cache. About 6 s before the end of its slice, it receives the next one and **already launches its ffmpeg** (`EncodeOverlapSeconds`): the startup (about 4 s) does not leave the encoder idle.
    - The **server also encodes slices in parallel** with the workers (`EncodeLocalAlongsideWorkers`), one at a time, never a slice reserved for a worker. It only passes its slice to a free worker once nothing is left pending.
@@ -103,7 +103,7 @@ dotnet test  src\RemoteTranscode.Tests -c Release
 # Emby plugin (relay published for each platform, compressed and embedded)
 pwsh tools\build-plugin.ps1                # -> artifacts\plugin\RemoteTranscode.EmbyPlugin.dll
 
-# Windows worker, with FFmpeg 9.0.2 "essentials" from gyan.dev, verified by SHA-256
+# Windows worker, with FFmpeg 9.0.2 "full" from gyan.dev (libplacebo for GPU tone mapping), verified by SHA-256
 pwsh tools\package-worker.ps1              # -> artifacts\worker-package\EmbyRemoteWorker\ and .zip
 pwsh tools\build-installer.ps1             # -> artifacts\installer\EmbyRemoteWorker-Setup-<version>.exe
 ```
@@ -120,8 +120,8 @@ Versions are set in `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.EmbyPlugin.c
 
 | Item | Version |
 |---|---|
-| Plugin | 0.7.25 |
-| Worker and installer | 0.7.14, with icon and GPU decoding (workers 0.7.7 to 0.7.13 remain compatible: 0.7.9 only shows the Emby queue counter during a job, 0.7.7 and 0.7.8 do not show it, 0.7.7 lacks conversion progress) |
+| Plugin | 0.7.26 |
+| Worker and installer | 0.7.15, with icon, GPU decoding and GPU tone mapping (FFmpeg "full" build: installer of about 218 MB instead of 170 MB). Workers 0.7.7 to 0.7.14 remain compatible but tone map on the processor and never receive conversions tone mapped on the GPU (also: 0.7.9 only shows the Emby queue counter during a job, 0.7.7 and 0.7.8 do not show it, 0.7.7 lacks conversion progress) |
 | Emby Server tested | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 without GPU); Emby's ffmpeg 5.1 (fork) |
 | Client tested | Emby Web in Chrome (hls.js player 1.6.0-beta.2) |
 | Workers tested | Windows 11 Enterprise, Intel Core Ultra 5 225U (x264 and QSV); PC with an RTX 4080 (x264 and NVENC, about 10x on a 1080p episode); FFmpeg 9.0.2 |

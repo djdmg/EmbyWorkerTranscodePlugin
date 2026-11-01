@@ -480,7 +480,10 @@ public sealed class EncodeQueue : IJobOwner
             Input = plan.Input,
             Output = plan.Output,
             ChunkTemplate = plan.ChunkTemplate,
-            Requirements = plan.Requirements!,
+            // HDR → SDR frozen now for the whole conversion: on the GPU (libplacebo) when a connected worker validated it,
+            // and then only such workers take its slices (never the server, whose ffmpeg has no libplacebo); otherwise
+            // zscale everywhere. Never both in one file: the renderings differ slightly.
+            Requirements = WorkerMatching.WithToneMapping(plan.Requirements!, dispatcher.ConnectedCapabilities()),
             Source = source,
             Shim = shim,
             Slices = await SlicesAsync(plan.Input, source.DurationSeconds, token),
@@ -497,6 +500,9 @@ public sealed class EncodeQueue : IJobOwner
         logger.LogInformation("Conversion {Id} captured ({Slices} slices): {Input} -> {Output}", task.Id, task.Slices.Count, plan.Input, plan.Output);
         if (options.EncodeAudioAhead && plan.AudioAhead is null)
             logger.LogInformation("Conversion {Id}: audio converted at assembly ({Reason})", task.Id, plan.AudioAheadReason);
+        if (EmbyFilters.NeedsToneMapping(task.Requirements.Filters))
+            logger.LogInformation("Conversion {Id}: HDR to SDR with {ToneMapper}", task.Id,
+                task.Requirements.ToneMapping == ToneMapper.Libplacebo ? "libplacebo (GPU, capable workers only)" : "zscale (CPU)");
         Wake();
         return new ShimAssigned(task.Id, "workers");
     }
@@ -963,9 +969,10 @@ public sealed class EncodeQueue : IJobOwner
         // Only the very first run of the first slice starts with the source and needs no seek.
         bool seek = !(slice.Index == 0 && startIndex == slice.FirstChunk);
         double? end = slice.Last ? task.Source?.DurationSeconds : slice.End;
-        // Filters translated here (EmbyFilters.TranslateArgs): the same graph for every slice, whoever encodes it.
+        // Filters translated here (EmbyFilters.TranslateArgs) with the conversion's tone mapper: the same graph for every
+        // slice, whoever encodes it.
         string[] template = EmbyFilters.TranslateArgs(EmbyConversionPlanner.ChunkArgs(task.ChunkTemplate, startIndex, startSeconds, seek,
-            slice.Last ? null : slice.End, end - startSeconds));
+            slice.Last ? null : slice.End, end - startSeconds), task.Requirements.ToneMapping);
         var file = new PlannedFile(0, JobFileKind.Input, task.Input, Path.GetFileName(task.Input), inputSize);
         return new JobPlan(true, "conversion", template, [file], EmbyConversionPlanner.ChunkSeconds, startIndex,
             $"encode/{task.Id}/seg_%d.ts", $"encode/{task.Id}/list.m3u8", task.Requirements)
@@ -1196,7 +1203,8 @@ public sealed class EncodeQueue : IJobOwner
                 "{input:0}" => task.Input,
                 "{list}" => list,
                 "{out}" => Path.Combine(dir, "chunk_%05d.ts"),
-                _ when filter => EmbyFilters.Translate(a),
+                // Already translated by PlanFor (zscale: a conversion tone mapped on the GPU never reaches the server).
+                _ when filter => EmbyFilters.Translate(a, ToneMapper.Zscale),
                 _ => a,
             });
             if (a == "-segment_list_type")

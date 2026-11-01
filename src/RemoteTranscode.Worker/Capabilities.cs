@@ -38,18 +38,115 @@ public static class CapabilityProbe
         }
 
         string[] hwDecoders = await HardwareDecodersAsync(ffmpeg, encodersList, validated, log);
+        string[] filters = ParseFilters(filtersList);
+        var toneMapping = await GpuToneMappingAsync(ffmpeg, filters, validated, log);
 
         return new WorkerCapabilities
         {
             FfmpegVersion = version,
             VideoEncoders = validated.ToArray(),
             HwDecoders = hwDecoders,
-            Filters = ParseFilters(filtersList),
+            Filters = filters,
             Gpus = Gpus(),
             LogicalCpus = Environment.ProcessorCount,
             TotalMemoryBytes = SystemLoad.TotalMemory(),
+            GpuToneMapping = toneMapping,
         };
     }
+
+    // Vulkan device name fragment of the GPU behind each hardware encoder family: the tone mapping is tried first on
+    // the GPU that encodes and decodes.
+    private static readonly Dictionary<string, string> VulkanVendors = new(StringComparer.Ordinal)
+    {
+        ["nvenc"] = "NVIDIA", ["qsv"] = "Intel", ["amf"] = "AMD",
+    };
+
+    // Options that make Intel drivers upload and download frames correctly (their default gives pink/green pictures
+    // without any error).
+    private const string SafeVulkanOptions = "disable_multiplane=1,linear_images=1";
+
+    /// <summary>
+    /// Below this PSNR (dB) against the CPU chain the GPU picture is wrong. Measured on the probe clip: 28.9 dB for a
+    /// correct libplacebo picture (bt.2390 against zscale + tonemap hable), about 10 dB for the corrupted pictures of an
+    /// Intel iGPU's default Vulkan device.
+    /// </summary>
+    public const double MinToneMappingPsnr = 20;
+
+    /// <summary>
+    /// HDR→SDR on the GPU (libplacebo through Vulkan): a short PQ clip is tone mapped by the exact chain jobs use
+    /// (<see cref="EmbyFilters.Translate"/> of Emby's graph) and compared, by PSNR, with the CPU chain (zscale + tonemap,
+    /// desat=0). An exit code 0 proves nothing: some drivers return corrupted pictures without an error. Each Vulkan
+    /// device (the encoders' GPUs first, then the default one) is tried as is, then with <see cref="SafeVulkanOptions"/>.
+    /// </summary>
+    private static async Task<GpuToneMapping?> GpuToneMappingAsync(string ffmpeg, string[] filters, IReadOnlyCollection<string> encoders, Action<string> log)
+    {
+        if (!new[] { "libplacebo", "hwupload", "hwdownload", "zscale", "tonemap", "psnr" }.All(filters.Contains))
+        {
+            log("tone mapping GPU : indisponible (FFmpeg sans libplacebo)");
+            return null;
+        }
+        string dir = Path.Combine(Path.GetTempPath(), "EmbyRemoteWorker-probe-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // 10-bit PQ BT.2020 clip of a test pattern kept at SDR brightness, where both chains agree closely.
+            string clip = Path.Combine(dir, "pq.mkv");
+            var made = await Run(ffmpeg, "-hide_banner -loglevel error -y -f lavfi -i testsrc2=size=640x360:rate=25 -t 0.4 " +
+                "-vf format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv,zscale=t=linear:npl=100," +
+                "format=gbrpf32le,zscale=p=bt2020:t=smpte2084:m=2020_ncl:r=tv:npl=100,format=yuv420p10le " +
+                $"-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc -color_range tv -c:v ffv1 \"{clip}\"", 60);
+            if (made.ExitCode != 0)
+            {
+                log($"tone mapping GPU : clip de test non créé ({FirstLine(made.Output)})");
+                return null;
+            }
+            // Emby's graph for an HDR source, as in its playback and conversion commands.
+            static string Emby(string instance) =>
+                $"setparams@{instance}1=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc,format@{instance}2=pix_fmts=p010," +
+                $"supertonemap@{instance}=tonemap=bt2390,setparams@{instance}3=color_primaries=bt709:color_trc=bt709:colorspace=bt709," +
+                $"format@{instance}4=pix_fmts=yuv420p";
+            string graph = $"[0:v]{EmbyFilters.Translate(Emby("r"), ToneMapper.Zscale)}[ref];[1:v]{EmbyFilters.Translate(Emby("g"), ToneMapper.Libplacebo)}[gpu];[gpu][ref]psnr";
+
+            var devices = HardwareDecoding.Families.Where(f => encoders.Any(e => HardwareDecoding.FamilyOf(e) == f))
+                .Select(f => VulkanVendors[f]).Append("").Distinct();
+            foreach (string device in devices)
+            {
+                foreach (string options in new[] { "", SafeVulkanOptions })
+                {
+                    string init = $"vulkan={EmbyFilters.VulkanDevice}" + (device.Length == 0 && options.Length == 0 ? "" : $":{device}") +
+                        (options.Length == 0 ? "" : "," + options);
+                    var result = await Run(ffmpeg, $"-hide_banner -loglevel info -nostats -init_hw_device {init} -filter_hw_device {EmbyFilters.VulkanDevice} " +
+                        $"-i \"{clip}\" -i \"{clip}\" -filter_complex \"{graph}\" -f null -", 60);
+                    double? psnr = Psnr(result.Output);
+                    bool ok = result.ExitCode == 0 && psnr >= MinToneMappingPsnr;
+                    log($"tone mapping GPU {init} : " + (ok ? $"OK (PSNR {psnr:0.0} dB)"
+                        : result.ExitCode != 0 ? $"inutilisable ({ErrorLine(result.Output)})"
+                        : $"image incorrecte (PSNR {(psnr is null ? "?" : psnr.Value.ToString("0.0"))} dB < {MinToneMappingPsnr})"));
+                    if (ok)
+                        return new GpuToneMapping(GpuToneMapping.LibplaceboMethod, init);
+                }
+            }
+            return null;
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>Average PSNR printed by the psnr filter ("PSNR y:.. u:.. v:.. average:28.90 ..."); "inf" for identical pictures.</summary>
+    internal static double? Psnr(string output)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(output, @"PSNR y:\S+ u:\S+ v:\S+ average:(?<v>inf|[0-9.]+)");
+        if (!m.Success)
+            return null;
+        return m.Groups["v"].Value == "inf" ? double.PositiveInfinity
+            : double.Parse(m.Groups["v"].Value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string ErrorLine(string output) =>
+        output.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Contains("rror", StringComparison.Ordinal) || l.Contains("ailed", StringComparison.Ordinal))
+        ?? FirstLine(output);
 
     /// <summary>
     /// For each GPU family with a validated hardware encoder, the codecs it really decodes: a short clip made with the

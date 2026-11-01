@@ -20,7 +20,12 @@ $Paths = [ordered]@{
     ShimLocalFirst = Join-Path $Work 'bin\shim-localfirst\remote-ffmpeg.exe'
     FakeFfmpeg    = Join-Path $Work 'bin\fake-emby-ffmpeg\fake-emby-ffmpeg.exe'
     WorkerExe     = Join-Path $Work 'bin\worker\EmbyRemoteWorker.exe'
-    WorkerFfmpeg  = 'C:\emby\artifacts\worker\EmbyRemoteWorker\ffmpeg\ffmpeg.exe'
+    # ffmpeg des workers de test : build « full » 9.0.2 (celui qu'embarque le worker depuis 0.7.15, avec libplacebo pour
+    # le tone mapping GPU) : celui de winget s'il est « full », sinon celui du prototype, sinon le ffmpeg du worker installé.
+    WorkerFfmpeg  = @(
+        $(if ($WingetBin -and $WingetBin.FullName -like '*full_build*') { Join-Path $WingetBin.DirectoryName 'ffmpeg.exe' }),
+        'C:\emby\wip\gputonemap\ffmpeg-full\ffmpeg-9.0.2-full_build\bin\ffmpeg.exe',
+        'C:\emby\artifacts\worker\EmbyRemoteWorker\ffmpeg\ffmpeg.exe') | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
     # ffmpeg/ffprobe « serveur » : build amont 9.0.2 (winget), en remplacement du ffmpeg modifié d'Emby (absent ici).
     ServerFfprobe = if ($WingetBin) { $WingetBin.FullName } else { $null }
     ServerFfmpeg  = if ($WingetBin) { Join-Path $WingetBin.DirectoryName 'ffmpeg.exe' } else { $null }

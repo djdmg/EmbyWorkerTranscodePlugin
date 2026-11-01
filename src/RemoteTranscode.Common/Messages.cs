@@ -47,6 +47,25 @@ public sealed record WorkerCapabilities
     public string[] Gpus { get; init; } = [];
     public int LogicalCpus { get; init; }
     public long TotalMemoryBytes { get; init; }
+
+    /// <summary>
+    /// HDR→SDR tone mapping on the GPU, validated at start-up by comparing its picture with the CPU chain's (a clean exit
+    /// code is not enough: some drivers return corrupted pictures without any error). Null when unavailable, switched
+    /// off in the worker's settings, or on workers before 0.7.15.
+    /// </summary>
+    public GpuToneMapping? GpuToneMapping { get; init; }
+}
+
+/// <param name="Method">"libplacebo" (<see cref="ToneMapper.Libplacebo"/>).</param>
+/// <param name="Device">
+/// Value of -init_hw_device that worked, naming the device <see cref="EmbyFilters.VulkanDevice"/> ("vulkan=vk", or
+/// "vulkan=vk:Intel,disable_multiplane=1,linear_images=1" for Intel drivers whose default corrupts the picture).
+/// </param>
+public sealed record GpuToneMapping(string Method, string Device)
+{
+    public const string LibplaceboMethod = "libplacebo";
+
+    public bool IsLibplacebo => Method == LibplaceboMethod;
 }
 
 /// <summary>

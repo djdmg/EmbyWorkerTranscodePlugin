@@ -81,7 +81,10 @@ public sealed class WorkerHost
                 return;
             }
             Config.ResolvedFfmpegPath = ffmpeg;
-            Service = new WorkerService(Config, Capabilities, Logger.Log);
+            // GPU tone mapping switched off in the settings: not announced, so the coordinator sends this worker no
+            // conversion tone mapped on the GPU, and playback is tone mapped on the CPU.
+            var published = Config.GpuToneMapping ? Capabilities : Capabilities with { GpuToneMapping = null };
+            Service = new WorkerService(Config, published, Logger.Log);
             cts = new CancellationTokenSource();
             var token = cts.Token;
             runTask = Task.Run(async () =>
@@ -218,8 +221,8 @@ public static class CapabilityCache
     {
         var info = new FileInfo(ffmpeg);
         // A different ffmpeg build or a driver update (part of the GPU names) invalidates the cache.
-        // "v2": full filter list since phase 3. "v3": hardware decoders.
-        string key = $"v3|{info.FullName}|{info.Length}|{info.LastWriteTimeUtc:O}|{string.Join(";", CapabilityProbe.Gpus())}";
+        // "v2": full filter list since phase 3. "v3": hardware decoders. "v4": GPU tone mapping (0.7.15).
+        string key = $"v4|{info.FullName}|{info.Length}|{info.LastWriteTimeUtc:O}|{string.Join(";", CapabilityProbe.Gpus())}";
         if (!force && File.Exists(CachePath))
         {
             try
@@ -239,6 +242,7 @@ public static class CapabilityCache
         File.WriteAllText(CachePath, JsonSerializer.Serialize(new Entry(key, caps)));
         log($"encodeurs validés : {string.Join(", ", caps.VideoEncoders)}");
         log($"décodage matériel validé : {(caps.HwDecoders.Length == 0 ? "aucun" : string.Join(", ", caps.HwDecoders))}");
+        log($"tone mapping GPU validé : {(caps.GpuToneMapping is { } tm ? $"{tm.Method} ({tm.Device})" : "aucun")}");
         return caps;
     }
 
