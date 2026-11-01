@@ -56,9 +56,9 @@ Safeguards: relay self-test at Emby startup, kill switch (`disabled` file), allo
    - The worker window (0.7.10, refreshed every 30 s) and the plugin page show the **number of items remaining in Emby's conversion queue**, read by the DLL inside Emby itself.
    - The plugin page opens in a browser (desktop or mobile), not in the Emby Android app, which does not run the JavaScript of third-party plugins.
 3. Toward the end of a conversion, the coordinator takes into account the **measured speed** of each worker: it does not give a slice to a slow worker (or to the server) if a faster one would clearly finish it first.
-4. An interrupted slice (worker released or lost) resumes at its first missing chunk, on another worker, or on the server if no worker has been free for 20 s, then returns to a worker.
+4. An interrupted slice (worker released or lost) resumes at its first missing chunk (from the source frame, read by ffprobe, where the previous run ended: ffmpeg lists chunk times on its own frame grid, up to half a frame off when the video does not start on it), on another worker, or on the server if no worker has been free for 20 s, then returns to a worker.
 5. When all slices are ready, the server **assembles** the file with Emby's command (video copied, Emby's audio and subtitles) and **verifies** it: total duration, then video duration **to the frame** (one and a half frames of tolerance, three for a source without presentation timestamps, whose end is only known to within two frames); if the end of the video cannot be read, the measurement is repeated and then the file is rejected; when in doubt, the file is rejected and the conversion is redone by Emby's ffmpeg.
-   - The `concat.txt` assembly list gives the **exact duration of each chunk** (`duration` directive of the concat format, taken from the worker's segment list). Without it, Emby's ffmpeg 5.1 sometimes estimated an MPEG-TS chunk one frame too short: the next chunk overlapped and the video ended frames too early (seen on a 4K episode: 10 frames, 0.42 s, rejected by the frame-exact check).
+   - The `concat.txt` assembly list gives the **exact duration of each chunk** (`duration` directive of the concat format, taken from the segment lists: a chunk lasts up to the start of the next one, and a slice's last chunk up to the slice's end when its listed end is within 20 ms of it, so each slice lasts exactly its length). Without it, Emby's ffmpeg 5.1 sometimes estimated an MPEG-TS chunk one frame too short: the next chunk overlapped and the video ended frames too early (seen on a 4K episode: 10 frames, 0.42 s, rejected by the frame-exact check).
    - A slice never ends with a chunk shorter than 2 s (its chunks are lengthened).
    - The coordinator log records the assembled chunks (`assembled from chunks`).
 6. GPU encoding available (QVBR for Intel QSV, `-cq` for NVIDIA NVENC), disabled by default. A single episode can therefore mix chunks from different encoders (QSV, NVENC, x264): their decoding parameters differ, but the changes happen at keyframes, as in adaptive streaming; full decoding without errors and playback verified on a Samsung TV.
@@ -114,7 +114,7 @@ Versions are set in `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.EmbyPlugin.c
 
 | Item | Version |
 |---|---|
-| Plugin | 0.7.21 |
+| Plugin | 0.7.22 |
 | Worker and installer | 0.7.13, with icon and GPU decoding (workers 0.7.7 to 0.7.12 remain compatible: 0.7.9 only shows the Emby queue counter during a job, 0.7.7 and 0.7.8 do not show it, 0.7.7 lacks conversion progress) |
 | Emby Server tested | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 without GPU); Emby's ffmpeg 5.1 (fork) |
 | Client tested | Emby Web in Chrome (hls.js player 1.6.0-beta.2) |

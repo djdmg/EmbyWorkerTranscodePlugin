@@ -60,6 +60,16 @@ public sealed class EncodeSlice
     [JsonIgnore]
     public bool EndingSignalled { get; set; }
 
+    /// <summary>
+    /// The resume point last looked up in the source (see EncodeQueue.ResumePointAsync): the time listed by the
+    /// previous run, and the source frame found for it (null: none close enough, the listed time is used).
+    /// </summary>
+    [JsonIgnore]
+    public double? ResumeListed { get; set; }
+
+    [JsonIgnore]
+    public double? ResumeFrame { get; set; }
+
     [JsonIgnore]
     public bool IsRunning => Worker != null;
 
@@ -239,6 +249,38 @@ public sealed class EncodeTask
             previousEnd = c.End;
         }
         return true;
+    }
+
+    /// <summary>
+    /// The length of each chunk of a done slice, for the concat list's duration directives. One run's chunks follow each
+    /// other frame after frame, so a chunk lasts up to the next one's start (the time of its first frame). Its listed
+    /// end is not used: ffmpeg's segment muxer takes it from the packet durations, and an end listed past the next
+    /// chunk's start adds to the assembled length at every chunk (suspected on an AV1 episode, Mr. Robot S03E09, encoded
+    /// by a worker and the server, 12 to 14 frames long; its server slices had many small chunks). A new run starts where
+    /// the previous one ended (its first chunk starts at the run's start), so this holds across runs too. The slice's
+    /// last chunk lasts up to the slice's end when its listed end is within a listing shift of it
+    /// (<see cref="MaxStartShift"/>): each slice then lasts exactly its length, whatever time base its run listed in.
+    /// Further off is left as listed: missing frames must show in the check. Call under the lock.
+    /// </summary>
+    public List<(int Index, double Duration)> ConcatDurations(EncodeSlice slice)
+    {
+        int n = ContiguousChunks(slice);
+        var chunks = Chunks.Where(c => c.Index >= slice.FirstChunk && c.Index < slice.FirstChunk + n).OrderBy(c => c.Index).ToList();
+        var durations = new List<(int, double)>(chunks.Count);
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            var c = chunks[i];
+            double end = c.End;
+            if (i + 1 < chunks.Count)
+            {
+                if (chunks[i + 1].Start > c.Start)
+                    end = chunks[i + 1].Start;
+            }
+            else if (!slice.Last && Math.Abs(slice.End - c.End) <= MaxStartShift)
+                end = slice.End;
+            durations.Add((c.Index, end - c.Start));
+        }
+        return durations;
     }
 
     /// <summary>
@@ -709,6 +751,7 @@ public sealed class EncodeQueue : IJobOwner
         double startSeconds;
         List<string> avoid;
         EncodeSlice? next;
+        var resume = await ResumePointAsync(task, slice, token);
         lock (gate)
         {
             if (!task.IsActive || task.Status == EncodeStatus.Assembling || slice.Done || slice.IsRunning)
@@ -735,6 +778,9 @@ public sealed class EncodeQueue : IJobOwner
                 task.Chunks.RemoveAll(c => c.Index >= slice.FirstChunk && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice);
             startIndex = slice.FirstChunk + task.ContiguousChunks(slice);
             startSeconds = task.EncodedEnd(slice);
+            // Resumed from the source frame where the previous run ended, not from its listed time (still the same).
+            if (startIndex > slice.FirstChunk && resume is { } r && r.Listed == startSeconds)
+                startSeconds = r.Frame;
             // The previous run reached the slice's end frame before it was stopped (a hand-over asked just as it
             // finished) or lost: nothing is left to encode. A new run would still encode one frame (its -t cannot be
             // 0), the next slice's first one, and the assembled video would show it twice, 1 frame late from there on.
@@ -829,6 +875,56 @@ public sealed class EncodeQueue : IJobOwner
                 : $"tranche {slice.Index + 1}/{task.Slices.Count} reprise à {startSeconds:0}s sur {job.Worker.Identity.Name}");
         }
         return true;
+    }
+
+    /// <summary>Largest gap between a listed resume point and the source frame taken for it: half a frame at 10 fps.</summary>
+    public const double MaxResumeShift = 0.05;
+
+    /// <summary>
+    /// Where a slice with chunks resumes: the source frame nearest to the end its previous run listed, with that
+    /// listed end; null when the slice has nothing to resume from or no frame was found close to it. ffmpeg lists chunk
+    /// times on its output frame grid (multiples of the frame duration from 0), and a video that does not start on
+    /// that grid (start time 0.007 s, Mr. Robot S03E09) is listed up to half a frame off its own times; boundaries, on
+    /// the contrary, are source frame times. A run resumed from a listed time 7 ms early kept its seek right but its -t,
+    /// which counts from the first frame kept, reached past the slice's end: it encoded the next slice's first frame,
+    /// shown twice once assembled (one frame late from there on; reproduced on the bench, T20a). Completed runs are
+    /// aligned on their end instead (<see cref="EncodeTask.AlignRunEnd"/>). The answer is kept for the slice while its
+    /// listed end does not change (one ffprobe pass per resume).
+    /// </summary>
+    private async Task<(double Listed, double Frame)?> ResumePointAsync(EncodeTask task, EncodeSlice slice, CancellationToken token)
+    {
+        double listed;
+        lock (gate)
+        {
+            if (!task.IsActive || slice.Done || slice.IsRunning || task.ContiguousChunks(slice) == 0 || !task.Consistent(slice))
+                return null;
+            listed = task.EncodedEnd(slice);
+            if (slice.ResumeListed == listed)
+                return slice.ResumeFrame is { } known ? (listed, known) : null;
+        }
+        double? frame = null;
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
+            limit.CancelAfter(TimeSpan.FromSeconds(10));
+            frame = await media.NearestFrameAsync(task.Input, listed, limit.Token);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning("Conversion {Id}: frame at {Time:0.###}s unreadable ({Error}), resuming from the listed time", task.Id, listed, ex.Message);
+        }
+        if (frame is { } f && Math.Abs(f - listed) > MaxResumeShift)
+            frame = null;
+        lock (gate)
+        {
+            slice.ResumeListed = listed;
+            slice.ResumeFrame = frame;
+        }
+        if (frame is { } found && found != listed)
+            logger.LogInformation("Conversion {Id} slice {Slice}: resuming at the source frame {Frame:0.######}s (listed {Listed:0.######}s)",
+                task.Id, slice.Index + 1, found, listed);
+        return frame is { } fr ? (listed, fr) : null;
     }
 
     /// <summary>
@@ -955,22 +1051,22 @@ public sealed class EncodeQueue : IJobOwner
             // ffmpeg concat demuxer list, slice after slice; single quotes in paths are escaped the way the demuxer expects.
             foreach (var slice in task.Slices.OrderBy(s => s.Index))
             {
-                int n = task.ContiguousChunks(slice);
-                for (int i = 0; i < n; i++)
+                var durations = task.ConcatDurations(slice);
+                foreach (var (index, duration) in durations)
                 {
-                    int index = slice.FirstChunk + i;
                     list.Append(CultureInfo.InvariantCulture, $"file '{ChunkPath(task.Id, index).Replace("'", "'\\''")}'\n");
-                    // Each chunk's exact length (from the worker's segment list): without it the concat demuxer
-                    // guesses it from the MPEG-TS file, and older ffmpeg builds (Emby's 5.1) guess one frame short
-                    // now and then; the next chunk then overlaps and the video ends frames early, drifting from the audio.
-                    if (task.Chunks.FirstOrDefault(c => c.Index == index) is { } chunk && chunk.End > chunk.Start)
-                        list.Append(CultureInfo.InvariantCulture, $"duration {chunk.End - chunk.Start:0.######}\n");
+                    // Each chunk's exact length (from the segment lists, see ConcatDurations): without it the concat
+                    // demuxer guesses it from the MPEG-TS file, and older ffmpeg builds (Emby's 5.1) guess one frame
+                    // short now and then; the next chunk then overlaps and the video ends frames early, drifting from the audio.
+                    if (duration > 0)
+                        list.Append(CultureInfo.InvariantCulture, $"duration {duration:0.######}\n");
                 }
-                // Kept in the log: which chunks went into the file, and up to where, for any later doubt about its end.
-                summary.Append(CultureInfo.InvariantCulture, $" {slice.Index + 1}:{n}@{task.EncodedEnd(slice):0.000}");
+                // Kept in the log: which chunks went into the file, up to where, and the slice's length in the list
+                // (its chunk durations added up), for any later doubt about its end.
+                summary.Append(CultureInfo.InvariantCulture, $" {slice.Index + 1}:{durations.Count}@{task.EncodedEnd(slice):0.000}/{durations.Sum(d => d.Duration):0.000}");
             }
         }
-        logger.LogInformation("Conversion {Id} assembled from chunks (slice:count@end):{Summary}", task.Id, summary);
+        logger.LogInformation("Conversion {Id} assembled from chunks (slice:count@end/listed length):{Summary}", task.Id, summary);
         logger.LogInformation("Conversion {Id}: {Audio}", task.Id, audioFile != null
             ? $"audio converted ahead used ({audioFile}, itsoffset {audioOffset})"
             : $"audio converted at assembly ({task.Audio ?? "désactivé"})");
@@ -1851,10 +1947,14 @@ public sealed class EncodeQueue : IJobOwner
         if (keptSpool != null && keptSpool != task.Id)
             DeleteSpool(keptSpool);
         keptSpool = task.Id;
-        var table = new StringBuilder("slice,slice_start,slice_end,index,start,end\n");
+        var table = new StringBuilder("slice,slice_start,slice_end,index,start,end,concat_duration\n");
         foreach (var slice in task.Slices.OrderBy(s => s.Index))
+        {
+            // The length each chunk was given in the concat list (empty past a gap: not assembled).
+            var durations = task.ConcatDurations(slice).ToDictionary(d => d.Index, d => d.Duration);
             foreach (var c in task.Chunks.Where(c => c.Index >= slice.FirstChunk && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice).OrderBy(c => c.Index))
-                table.Append(CultureInfo.InvariantCulture, $"{slice.Index + 1},{slice.Start:0.######},{slice.End:0.######},{c.Index},{c.Start:0.######},{c.End:0.######}\n");
+                table.Append(CultureInfo.InvariantCulture, $"{slice.Index + 1},{slice.Start:0.######},{slice.End:0.######},{c.Index},{c.Start:0.######},{c.End:0.######},{(durations.TryGetValue(c.Index, out double d) ? d.ToString("0.######", CultureInfo.InvariantCulture) : "")}\n");
+        }
         try
         {
             File.WriteAllText(Path.Combine(SpoolDir(task.Id), "chunks.csv"), table.ToString());

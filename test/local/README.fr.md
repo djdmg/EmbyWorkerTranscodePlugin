@@ -117,7 +117,7 @@ n'influence les autres scénarios. La jonction serveur (run sans `-ss`) → work
 | `tests-localfirst.ps1` | Les tests LF du démarrage rapide (relais `shim-localfirst` + faux ffmpeg d'Emby) |
 | `fake-emby-ffmpeg\` | Faux ffmpeg d'Emby (projet .NET 8 autonome, aucune dépendance à `src`) |
 | `run-tests.ps1` | Mise en place du banc, exécution, arrêt, tableau de résultats |
-| `tests-sleep.ps1` | T13 : mise en veille simulée d'un worker (processus gelés 40 s) pendant une lecture et une conversion |
+| `tests-sleep.ps1` | T13 : mise en veille simulée d'un worker (processus gelés 40 s) pendant une lecture et une conversion ; T14–T19 (conversions : worker en échec, serveur en parallèle d'un worker, audio à l'avance, serveur d'abord, HDR, serveur seul) ; T20 : source AV1 10 bits à départ vidéo de 7 ms (`media\film_av1_10bit.mkv`, générée au premier lancement), w1 (logiciel puis GPU) + serveur, nombre d'images de la sortie et durée listée contre durée réelle de chaque morceau (dossier de travail copié dans `out\spool-t20x`, table `chunks-measured.csv`) |
 | `00-gen-media.ps1` | Médias de test : H.264 1080p 150 s (2 pistes audio fre 440 Hz / eng 880 Hz, sous-titres SRT intégrés + `.srt` externe), HEVC 10 bits HDR10 (BT.2020/PQ) 120 s, police |
 | `smoke.ps1` / `cleanup.ps1` | Vérification rapide / nettoyage |
 

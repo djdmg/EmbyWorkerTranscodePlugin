@@ -8,6 +8,19 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.22 — 2026-11-01
+
+Built and published by GitHub Actions (release v0.7.22).
+
+### Fixed
+
+- **Plugin** — Duplicated frame where a slice is resumed, on sources whose video does not start at 0 (Mr. Robot S03E09: video starting at 0.007 s, assembled 12 then 14 frames too long and given back to Emby). ffmpeg lists chunk times on its own frame grid (multiples of 1/23.976 s from 0), so they are a few milliseconds off the source's real frame times; a resumed slice (hand-over from the server to a worker, lost worker, run stopped right at its end) restarted from that listed time and its `-t` ran past the slice end, encoding the next slice's first frame again. A resumed slice now restarts from the source frame nearest to the listed end (read with ffprobe, at most 0.05 s away), and a run stopped at its slice's end marks the slice done instead of encoding one more frame.
+- **Plugin** — Durations of the assembly list: each chunk lasts until the next one starts, and a slice's last chunk ends at the slice end when its listed end is within 0.02 s of it, so every slice lasts exactly its length whatever the time base of the segment lists or overlapping tiny chunks of the server's runs (larger gaps are not stretched, so missing frames stay visible to the check). The log line « assembled from chunks » now gives `slice:count@end/listed length`, and the kept `chunks.csv` of a rejected assembly has a `concat_duration` column.
+
+### Bench
+
+- T20: AV1 10-bit source whose video starts at 7 ms, encoded by a worker (software, then GPU) together with the server, with a server → worker hand-over: 11509/11509 frames, no duplicate. 175 unit tests.
+
 ## Worker 0.7.13 — 2026-11-01
 
 ### Fixed

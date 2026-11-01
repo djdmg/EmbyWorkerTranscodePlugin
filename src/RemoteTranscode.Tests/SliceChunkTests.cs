@@ -117,4 +117,93 @@ public class SliceChunkTests
         task.AlignRunEnd(slice);
         Assert.Equal(236.231, task.EncodedEnd(slice), 6);
     }
+
+    // A server slice of Mr. Robot S03E09 (AV1, video from 0.007 s) as Emby's ffmpeg cut it: small chunks first, then
+    // 30 s ones, every listed end past the next chunk's start, the last one past the slice's end.
+    private static (EncodeTask, EncodeSlice) OverlappingRun(double overlap, bool last = false, double end = 357.065)
+    {
+        var slice = new EncodeSlice { Index = 2, Start = 238.113, End = 357.065, Last = last, RunStartSeconds = 238.113, RunStartIndex = 200 };
+        var task = Task(slice);
+        double[] starts = [238.113, 238.155, 238.197, 239.239, 240.240, 270.270, 300.300, 330.330];
+        for (int i = 0; i < starts.Length; i++)
+            task.AddChunk(slice, 200 + i, starts[i], (i + 1 < starts.Length ? starts[i + 1] : end) + overlap, 1);
+        return (task, slice);
+    }
+
+    [Fact]
+    public void Concat_durations_end_each_chunk_at_the_next_ones_start()
+    {
+        var (task, slice) = OverlappingRun(0.007);
+        // Listed as is, the slice would last 8 × 7 ms more than its length: about one frame and a half.
+        Assert.Equal(118.952 + 8 * 0.007, task.Chunks.Sum(c => c.End - c.Start), 6);
+        var durations = task.ConcatDurations(slice);
+        Assert.Equal(8, durations.Count);
+        Assert.Equal(0.042, durations[0].Duration, 6);
+        Assert.Equal(30.030, durations[5].Duration, 6);
+        Assert.Equal(118.952, durations.Sum(d => d.Duration), 6);
+    }
+
+    [Fact]
+    public void Concat_durations_fill_ends_listed_short()
+    {
+        // Every end listed 15 ms before the next start, the last one too (still a listing shift, under half a frame).
+        var (task, slice) = OverlappingRun(-0.015);
+        Assert.Equal(118.952, task.ConcatDurations(slice).Sum(d => d.Duration), 6);
+    }
+
+    [Fact]
+    public void Concat_durations_do_not_stretch_a_run_short_of_frames()
+    {
+        // Ends 0.1 s before the slice's end: missing frames, which the check must see.
+        var (task, slice) = OverlappingRun(0.007, end: 356.958);
+        Assert.Equal(118.852, task.ConcatDurations(slice).Sum(d => d.Duration), 6);
+    }
+
+    [Fact]
+    public void Concat_durations_of_the_last_slice_keep_its_listed_end()
+    {
+        var (task, slice) = OverlappingRun(0.007, last: true);
+        Assert.Equal(118.959, task.ConcatDurations(slice).Sum(d => d.Duration), 6);
+    }
+
+    [Fact]
+    public void Concat_durations_agree_with_an_aligned_run()
+    {
+        var (task, slice) = ShiftedRun(0.005);
+        task.AlignRunEnd(slice);
+        Assert.Equal(task.Chunks.Select(c => c.End - c.Start), task.ConcatDurations(slice).Select(d => d.Duration), new ToleranceComparer(1e-9));
+    }
+
+    [Fact]
+    public void Concat_durations_join_two_runs_of_a_slice()
+    {
+        // First run (server) stopped after its first chunk, listing 7 ms late; the second (worker) resumes at its end.
+        var (task, slice) = Resumed();
+        task.Chunks[0] = task.Chunks[0] with { End = 150.007 };
+        slice.RunStartSeconds = 150.007;
+        task.AddChunk(slice, 101, 0, 180, 1);
+        task.AddChunk(slice, 102, 180, 240, 1);
+        var durations = task.ConcatDurations(slice);
+        Assert.Equal([30.007, 29.993, 60], durations.Select(d => Math.Round(d.Duration, 6)));
+        Assert.Equal(120, durations.Sum(d => d.Duration), 6);
+    }
+
+    [Fact]
+    public void Resume_point_is_the_source_frame_nearest_to_the_listed_end()
+    {
+        // Mr. Robot S03E09: frames at 0.007 s + n / 23.976 (in milliseconds), listed on the n / 23.976 grid, 7 ms early.
+        var frames = Enumerable.Range(2600, 10).Select(n => Math.Round(0.007 + n * 1001 / 24000.0, 3)).ToList();
+        double listed = 2604 * 1001 / 24000.0;
+        Assert.Equal(108.616, ServerMedia.NearestFrame(frames, listed));
+        Assert.Equal(108.616, ServerMedia.NearestFrame(frames, listed + 0.014));
+        Assert.Equal(frames[0], ServerMedia.NearestFrame(frames, 0));
+        Assert.Equal(frames[^1], ServerMedia.NearestFrame(frames, 1000));
+        Assert.Null(ServerMedia.NearestFrame([], listed));
+    }
+
+    private sealed class ToleranceComparer(double tolerance) : IEqualityComparer<double>
+    {
+        public bool Equals(double x, double y) => Math.Abs(x - y) <= tolerance;
+        public int GetHashCode(double obj) => 0;
+    }
 }

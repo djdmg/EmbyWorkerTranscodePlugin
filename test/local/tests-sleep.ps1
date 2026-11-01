@@ -381,3 +381,113 @@ function T19 {
     Add-Result 'T19' 'Conversion faite entièrement par le serveur, sur plusieurs tranches' $(if ($ok) { 'PASS' } else { 'FAIL' }) (
         "final : $(Prop $e 'Status'), workers $(Prop $e 'Worker'), note « $(Prop $e 'Note') », erreur « $(Prop $e 'Error') » | « $assembled » | contrôle : « $verify » | code $code | $($chk.Text)")
 }
+
+# Source AV1 10 bits comme Mr. Robot S03E09 (1080p, 23,976 i/s, vidéo décalée de 7 ms : start_time 0,007, audio à 0),
+# 8 min tirées de film_2398.mkv. AV1 par QSV si le GPU le permet (≈ 1,5 min), sinon libaom (plus lent).
+function Initialize-Av1Media {
+    $dst = Join-Path $Paths.Media 'film_av1_10bit.mkv'
+    if (Test-Path $dst) { return $dst }
+    $src = Join-Path $Paths.Media 'film_2398.mkv'
+    $tmp = Join-Path $Paths.Media 'film_av1_10bit.video.mkv'
+    $common = @('-hide_banner', '-v', 'error', '-y', '-t', '480', '-i', $src, '-an', '-vf', 'scale=1920:1080,format=p010le', '-g', '96', '-b:v', '3M')
+    & $Paths.WorkerFfmpeg @common -c:v av1_qsv -preset faster $tmp
+    if ($LASTEXITCODE) { & $Paths.WorkerFfmpeg @common -c:v libaom-av1 -cpu-used 8 -row-mt 1 $tmp }
+    if ($LASTEXITCODE) { throw 'génération de la source AV1 en échec' }
+    & $Paths.ServerFfmpeg -hide_banner -v error -y -itsoffset 0.007 -i $tmp -t 480 -i $src -map 0:v -map 1:a -c copy $dst
+    if ($LASTEXITCODE) { throw 'remux de la source AV1 en échec' }
+    Remove-Item $tmp -Force
+    $dst
+}
+
+# Images et durée de la vidéo d'un fichier (paquets comptés ; de la première image à la fin de la dernière).
+function Measure-Video([string]$file) {
+    $pk = @(& $Paths.ServerFfprobe -v error -select_streams v:0 -show_entries packet=pts_time,duration_time -of csv=p=0 $file)
+    $min = [double]::MaxValue; $max = 0.0; $n = 0
+    foreach ($l in $pk) {
+        $f = "$l".Split(',')
+        if ($f.Count -lt 1 -or -not $f[0] -or $f[0] -eq 'N/A') { continue }
+        $t = [double]::Parse($f[0], [cultureinfo]::InvariantCulture)
+        $d = if ($f.Count -gt 1 -and $f[1] -and $f[1] -ne 'N/A') { [double]::Parse($f[1], [cultureinfo]::InvariantCulture) } else { 0 }
+        $n++
+        if ($t -lt $min) { $min = $t }
+        if ($t + $d -gt $max) { $max = $t + $d }
+    }
+    [pscustomobject]@{ Frames = $n; Duration = $max - $min; First = $min }
+}
+
+# Morceaux d'une conversion (copie du dossier de travail du coordinateur) : durée listée dans concat.txt contre durée
+# réelle (images comptées × durée d'une image), morceau par morceau. Table écrite dans <dossier>\chunks-measured.csv.
+function Measure-Chunks([string]$dir, [double]$frame) {
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($l in Get-Content (Join-Path $dir 'concat.txt')) {
+        if ($l -match "^file '(.*)'$") { $rows.Add([pscustomobject]@{ File = Split-Path $Matches[1] -Leaf; Listed = 0.0; Frames = 0; Real = 0.0 }) }
+        elseif ($l -match '^duration (.+)$') { $rows[$rows.Count - 1].Listed = [double]::Parse($Matches[1], [cultureinfo]::InvariantCulture) }
+    }
+    foreach ($r in $rows) {
+        $v = Measure-Video (Join-Path $dir $r.File)
+        $r.Frames = $v.Frames
+        $r.Real = $v.Frames * $frame
+    }
+    $inv = [cultureinfo]::InvariantCulture
+    @('file,listed,frames,real,listed_minus_real') + @($rows | ForEach-Object { [string]::Format($inv, '{0},{1:0.######},{2},{3:0.######},{4:0.######}', $_.File, $_.Listed, $_.Frames, $_.Real, ($_.Listed - $_.Real)) }) |
+        Set-Content (Join-Path $dir 'chunks-measured.csv')
+    $listed = ($rows | Measure-Object Listed -Sum).Sum
+    $real = ($rows | Measure-Object Real -Sum).Sum
+    $worst = $rows | Sort-Object { [math]::Abs($_.Listed - $_.Real) } -Descending | Select-Object -First 3
+    [pscustomobject]@{
+        Count = $rows.Count; Listed = $listed; Real = $real; Frames = ($rows | Measure-Object Frames -Sum).Sum
+        Off = @($rows | Where-Object { [math]::Abs($_.Listed - $_.Real) -gt 0.002 }).Count
+        Worst = ($worst | ForEach-Object { '{0} {1:+0.000;-0.000}s' -f $_.File, ($_.Listed - $_.Real) }) -join ', '
+    }
+}
+
+# Source AV1 10 bits à start_time 0,007 (Mr. Robot S03E09, rejeté +12/+14 images sur le serveur réel) convertie par w1
+# et le serveur en parallèle (comme T15) : a) w1 en logiciel (libx264), b) w1 en GPU (QSV, comme un worker NVENC). La
+# sortie doit avoir exactement les images de la source, et la somme des durées listées des morceaux leur durée réelle :
+# le dossier de travail du coordinateur est copié (work\out\spool-t20x) dès que la liste d'assemblage est écrite.
+#   pwsh -File run-tests.ps1 -Only T20
+function T20 {
+    $src = Initialize-Av1Media
+    $fd = 1001 / 24000
+    $srcV = Measure-Video $src
+    foreach ($variant in @(@{ Id = 'a'; Hw = $false; Label = 'w1 logiciel' }, @{ Id = 'b'; Hw = $true; Label = 'w1 GPU' })) {
+        $name = "t20$($variant.Id)"
+        if ($Bench.Workers['w1']) { Stop-Worker 'w1' }
+        Set-TestWorkerConfig 'w1' @{ HardwareEncodingForConversions = $variant.Hw }
+        Ensure-Workers @('w1') -Only
+        $out = Join-Path $Paths.Out "conv-$name.mp4"
+        $copy = Join-Path $Paths.Out "spool-$name"
+        Remove-Item $copy -Recurse -Force -ErrorAction SilentlyContinue
+        $spoolRoot = Join-Path $Paths.CoordDir 'encode'
+        $t0 = Get-Date
+        $s = Start-Shim (New-ConversionArgs -InputPath $src -OutputPath $out -InputCodec none) $name
+        $copied = $false; $deadline = (Get-Date).AddSeconds(1800)
+        while (-not $s.HasExited -and (Get-Date) -lt $deadline) {
+            if (-not $copied) {
+                $d = Get-ChildItem $spoolRoot -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.CreationTime -gt $t0 -and (Test-Path (Join-Path $_.FullName 'concat.txt')) } | Select-Object -First 1
+                if ($d) { Copy-Item $d.FullName $copy -Recurse; $copied = $true }
+            }
+            Start-Sleep -Milliseconds 200
+        }
+        $code = Wait-Exit $s 60
+        $assembled = @(Log-Excerpt 'coordinator' 'assembled from chunks' 100)[-1]
+        $verify = Log-Excerpt "shim-$name" 'source .*sultat|rejet' 1
+        $encoders = @(Log-Excerpt (WorkerLog 'w1') 'encoder \S+,' 50 | ForEach-Object { if ($_ -match 'encoder (\S+),') { $Matches[1] } }) | Sort-Object -Unique
+        $outV = if (Test-Path $out) { Measure-Video $out } else { $null }
+        $m = if ($copied) { Measure-Chunks $copy $fd } else { $null }
+        $chk = Check-Output $out (Probe $src).Duration 1
+        $framesOk = $outV -and $outV.Frames -eq $srcV.Frames -and [math]::Abs($outV.Duration - $srcV.Duration) -le 1.5 * $fd
+        $listOk = $m -and [math]::Abs($m.Listed - $srcV.Duration) -le 1.5 * $fd -and $m.Frames -eq $srcV.Frames
+        $runners = Get-ConversionRunners $out
+        $ok = $code -eq 0 -and $verify -match 'sultat' -and $verify -notmatch 'rejet' -and $chk.Ok -and $framesOk -and $listOk `
+            -and $runners.LocalRuns -gt 0 -and $runners.Workers -contains 'w1'
+        $mText = if ($m) { "morceaux : $($m.Count), $($m.Frames) images ; somme listée {0:0.000}s, réelle {1:0.000}s ({2:+0.000;-0.000}s) ; écart > 2 ms : $($m.Off) ($($m.Worst))" -f $m.Listed, $m.Real, ($m.Listed - $m.Real) } else { 'dossier de travail non copié' }
+        $oText = if ($outV) { '{0} images, {1:0.000}s' -f $outV.Frames, $outV.Duration } else { 'absente' }
+        Add-Result "T20$($variant.Id)" "Source AV1 10 bits (start_time 0,007) : $($variant.Label) + serveur, à l'image près" $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+            "encodeur w1 : $($encoders -join ', ') | tranches lancées sur le serveur : $($runners.LocalRuns), workers : $($runners.Workers -join ', ') | source : $($srcV.Frames) images, {0:0.000}s | sortie : $oText | $mText | « $assembled » | contrôle : « $verify » | code $code | $($chk.Text)" -f $srcV.Duration)
+    }
+    Stop-Worker 'w1'
+    Set-TestWorkerConfig 'w1' @{ HardwareEncodingForConversions = $false }
+    Ensure-Workers @('w1', 'w2')
+}

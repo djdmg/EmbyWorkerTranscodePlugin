@@ -54,9 +54,9 @@ Garde-fous : auto-test du relais au démarrage d'Emby, coupe-circuit (fichier `d
    - La fenêtre du worker (0.7.10, mise à jour toutes les 30 s) et la page du plugin affichent le **nombre d'éléments restant dans la file de conversion d'Emby**, lu par la DLL dans Emby lui-même.
    - La page du plugin s'ouvre dans un navigateur (ordinateur ou mobile), pas dans l'appli Android d'Emby, qui n'exécute pas le JavaScript des plugins tiers.
 3. En fin de conversion, le coordinateur tient compte de la **vitesse mesurée** de chaque worker : il ne donne pas une tranche à un worker lent (ni au serveur) si un plus rapide la finirait clairement avant.
-4. Une tranche interrompue (worker libéré ou perdu) reprend à son premier morceau manquant, sur un autre worker, ou sur le serveur si aucun worker n'est libre depuis 20 s, puis revient sur un worker.
+4. Une tranche interrompue (worker libéré ou perdu) reprend à son premier morceau manquant (à l'image de la source, lue par ffprobe, où le run précédent s'est arrêté : ffmpeg liste les heures des morceaux sur sa propre grille d'images, décalée jusqu'à une demi-image quand la vidéo ne commence pas dessus), sur un autre worker, ou sur le serveur si aucun worker n'est libre depuis 20 s, puis revient sur un worker.
 5. Quand toutes les tranches sont prêtes, le serveur **assemble** le fichier avec la commande d'Emby (vidéo recopiée, audio et sous-titres d'Emby) et le **vérifie** : durée totale, puis durée de la vidéo **à l'image près** (une image et demie de tolérance, trois pour une source sans horodatages d'affichage, dont la fin n'est connue qu'à deux images près) ; si la fin de la vidéo ne peut pas être lue, la mesure est refaite puis le fichier est rejeté ; en cas de doute, le fichier est rejeté et la conversion est refaite par le ffmpeg d'Emby.
-   - La liste d'assemblage `concat.txt` donne la **durée exacte de chaque morceau** (directive `duration` du format concat, tirée de la liste de segments du worker). Sans elle, le ffmpeg 5.1 d'Emby estimait parfois un morceau MPEG-TS une image trop court : le morceau suivant chevauchait et la vidéo finissait des images trop tôt (constaté sur un épisode 4K : 10 images, 0,42 s, rejeté par le contrôle à l'image près).
+   - La liste d'assemblage `concat.txt` donne la **durée exacte de chaque morceau** (directive `duration` du format concat, tirée des listes de segments : un morceau dure jusqu'au début du suivant, et le dernier morceau d'une tranche jusqu'à la fin de la tranche quand sa fin listée en est à moins de 20 ms, si bien que chaque tranche dure exactement sa longueur). Sans elle, le ffmpeg 5.1 d'Emby estimait parfois un morceau MPEG-TS une image trop court : le morceau suivant chevauchait et la vidéo finissait des images trop tôt (constaté sur un épisode 4K : 10 images, 0,42 s, rejeté par le contrôle à l'image près).
    - Une tranche ne se termine jamais par un morceau de moins de 2 s (ses morceaux sont allongés).
    - Le journal du coordinateur note les morceaux assemblés (`assembled from chunks`).
 6. Encodage GPU possible (QVBR pour Intel QSV, `-cq` pour NVIDIA NVENC), désactivé par défaut. Un même épisode peut ainsi mêler des morceaux d'encodeurs différents (QSV, NVENC, x264) : leurs paramètres de décodage diffèrent, mais les changements ont lieu aux images clés, comme en streaming adaptatif ; décodage complet sans erreur et lecture vérifiée sur une télévision Samsung.
@@ -112,7 +112,7 @@ Les versions se règlent dans `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.Em
 
 | Élément | Version |
 |---|---|
-| Plugin | 0.7.21 |
+| Plugin | 0.7.22 |
 | Worker et installeur | 0.7.13, avec icône et décodage par le GPU (les workers 0.7.7 à 0.7.12 restent compatibles : 0.7.9 n'affiche le compteur de la file d'Emby que pendant une tâche, 0.7.7 et 0.7.8 ne l'affichent pas, 0.7.7 sans l'avancement des conversions) |
 | Emby Server testé | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 sans GPU) ; ffmpeg d'Emby 5.1 (fork) |
 | Client testé | Emby Web dans Chrome (lecteur hls.js 1.6.0-beta.2) |

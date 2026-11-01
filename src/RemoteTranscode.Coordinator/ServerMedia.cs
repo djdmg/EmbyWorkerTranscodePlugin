@@ -111,39 +111,15 @@ public sealed class ServerMedia(CoordinatorOptions options)
     /// </summary>
     public async Task<Boundary?[]> BoundariesAsync(string path, IReadOnlyList<double> times, CancellationToken token)
     {
-        static string F(double v) => v.ToString("0.######", CultureInfo.InvariantCulture);
         var result = new Boundary?[times.Count];
         if (times.Count == 0)
             return result;
-        // "V": video but not cover art. Each interval seeks to the keyframe before its start and reads past the time;
-        // intervals are in file timestamps, and the margins cover a start time of a few seconds. The start of the file
-        // is read by packet count instead: the video may begin well after 0 (audio copied from earlier, for instance).
-        string intervals = string.Join(",", times.Select(t => t <= 0 ? "%+#60" : $"{F(Math.Max(0, t - 5))}%{F(t + 5)}"));
-        var (code, output, _) = await RunAsync(options.ServerFfprobe,
-            ["-v", "error", "-select_streams", "V:0", "-read_intervals", intervals,
-             "-show_entries", "packet=pts_time,pos,flags:format=start_time", "-print_format", "json", path], token);
-        if (code != 0)
+        // A video without presentation times on its packets (AVI with packed B-frames, placeholder frames): runs
+        // seeking into it do not meet at the same frame, so it is not cut at all (no boundary: one slice).
+        if (await FramesAroundAsync(path, times, token) is not { } frames)
             return result;
-        using var doc = JsonDocument.Parse(output);
-        double start = 0;
-        if (doc.RootElement.TryGetProperty("format", out var format) && format.TryGetProperty("start_time", out var st)
-            && double.TryParse(st.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double s))
-            start = s;
-        var frames = new List<(double Time, long? Position, bool Key)>();
-        if (doc.RootElement.TryGetProperty("packets", out var packets))
-            foreach (var p in packets.EnumerateArray())
-            {
-                // A video without presentation times on its packets (AVI with packed B-frames, placeholder frames):
-                // runs seeking into it do not meet at the same frame, so it is not cut at all (no boundary: one slice).
-                if (!(p.TryGetProperty("pts_time", out var pt) && double.TryParse(pt.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double pts)))
-                    return new Boundary?[times.Count];
-                long? pos = p.TryGetProperty("pos", out var ps) && long.TryParse(ps.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out long v) ? v : null;
-                bool key = p.TryGetProperty("flags", out var fl) && (fl.GetString() ?? "").Contains('K');
-                frames.Add((pts - start, pos, key));
-            }
-        // Packets come in decoding order and from all windows: for each time, the smallest presentation time at or
-        // after it. A window always contains that frame (and the keyframe before it), so it is the true next frame.
-        frames.Sort((a, b) => a.Time.CompareTo(b.Time));
+        // For each time, the smallest presentation time at or after it. A window always contains that frame (and the
+        // keyframe before it), so it is the true next frame.
         var times0 = frames.Select(f => f.Time).ToList();
         for (int i = 0; i < times.Count; i++)
         {
@@ -157,6 +133,68 @@ public sealed class ServerMedia(CoordinatorOptions options)
             result[i] = new Boundary(frames[k].Time, keyframe, frames[k].Position);
         }
         return result;
+    }
+
+    /// <summary>
+    /// The time of the video frame nearest to <paramref name="time"/>, counted like the boundaries; null when none was
+    /// read around it. Where a run's last chunk ended is listed on the run's output frame grid, which is not the
+    /// source's when the video does not start on it (start time 0.007 s): the listed time is the frame's own time
+    /// rounded by up to half a frame (see EncodeQueue.ResumePointAsync).
+    /// </summary>
+    public async Task<double?> NearestFrameAsync(string path, double time, CancellationToken token) =>
+        await FramesAroundAsync(path, [time], token) is { } frames ? NearestFrame(frames.Select(f => f.Time).ToList(), time) : null;
+
+    /// <summary>The time nearest to <paramref name="time"/> in a sorted list, null when the list is empty.</summary>
+    public static double? NearestFrame(List<double> sortedTimes, double time)
+    {
+        if (sortedTimes.Count == 0)
+            return null;
+        int k = sortedTimes.BinarySearch(time);
+        if (k >= 0)
+            return sortedTimes[k];
+        k = ~k;
+        if (k == 0)
+            return sortedTimes[0];
+        if (k == sortedTimes.Count)
+            return sortedTimes[^1];
+        return time - sortedTimes[k - 1] <= sortedTimes[k] - time ? sortedTimes[k - 1] : sortedTimes[k];
+    }
+
+    /// <summary>
+    /// Video packets (presentation time from the file's start, position, keyframe) in a window around each time, in
+    /// presentation order. One ffprobe pass that reads packets only (no decoding). Null when ffprobe fails or a packet
+    /// has no presentation time.
+    /// </summary>
+    private async Task<List<(double Time, long? Position, bool Key)>?> FramesAroundAsync(string path, IReadOnlyList<double> times, CancellationToken token)
+    {
+        static string F(double v) => v.ToString("0.######", CultureInfo.InvariantCulture);
+        // "V": video but not cover art. Each interval seeks to the keyframe before its start and reads past the time;
+        // intervals are in file timestamps, and the margins cover a start time of a few seconds. The start of the file
+        // is read by packet count instead: the video may begin well after 0 (audio copied from earlier, for instance).
+        string intervals = string.Join(",", times.Select(t => t <= 0 ? "%+#60" : $"{F(Math.Max(0, t - 5))}%{F(t + 5)}"));
+        var (code, output, _) = await RunAsync(options.ServerFfprobe,
+            ["-v", "error", "-select_streams", "V:0", "-read_intervals", intervals,
+             "-show_entries", "packet=pts_time,pos,flags:format=start_time", "-print_format", "json", path], token);
+        if (code != 0)
+            return null;
+        using var doc = JsonDocument.Parse(output);
+        double start = 0;
+        if (doc.RootElement.TryGetProperty("format", out var format) && format.TryGetProperty("start_time", out var st)
+            && double.TryParse(st.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double s))
+            start = s;
+        var frames = new List<(double Time, long? Position, bool Key)>();
+        if (doc.RootElement.TryGetProperty("packets", out var packets))
+            foreach (var p in packets.EnumerateArray())
+            {
+                if (!(p.TryGetProperty("pts_time", out var pt) && double.TryParse(pt.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double pts)))
+                    return null;
+                long? pos = p.TryGetProperty("pos", out var ps) && long.TryParse(ps.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out long v) ? v : null;
+                bool key = p.TryGetProperty("flags", out var fl) && (fl.GetString() ?? "").Contains('K');
+                frames.Add((pts - start, pos, key));
+            }
+        // Packets come in decoding order and from all windows.
+        frames.Sort((a, b) => a.Time.CompareTo(b.Time));
+        return frames;
     }
 
     // Probed once; a concurrent first call may probe twice, which is harmless.

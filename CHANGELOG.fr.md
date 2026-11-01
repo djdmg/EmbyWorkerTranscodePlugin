@@ -6,6 +6,19 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.22 — 01/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.22).
+
+### Corrigé
+
+- **Plugin** — Image en double à la reprise d'une tranche, sur les sources dont la vidéo ne commence pas à 0 (Mr. Robot S03E09 : vidéo à 0,007 s, assemblée trop longue de 12 puis 14 images et rendue à Emby). ffmpeg liste les heures des morceaux sur sa propre grille d'images (multiples de 1/23,976 s depuis 0), à quelques millisecondes des vraies heures des images de la source ; une tranche reprise (passage du serveur à un worker, worker perdu, run arrêté pile à sa fin) repartait de cette heure listée et son `-t` dépassait la fin de la tranche, réencodant la première image de la tranche suivante. Une tranche reprise repart maintenant de l'image de la source la plus proche de la fin listée (lue par ffprobe, à 0,05 s au plus), et un run arrêté à la fin de sa tranche marque la tranche terminée au lieu d'encoder une image de plus.
+- **Plugin** — Durées de la liste d'assemblage : chaque morceau dure jusqu'au début du suivant, et le dernier morceau d'une tranche s'arrête à la fin de la tranche quand sa fin listée en est à 0,02 s au plus ; chaque tranche dure donc exactement sa longueur, quelle que soit la base de temps des listes ou le chevauchement des petits morceaux du serveur (un écart plus grand n'est pas étiré : des images manquantes restent visibles au contrôle). La ligne de journal « assembled from chunks » donne maintenant `tranche:nombre@fin/longueur listée`, et le `chunks.csv` gardé d'un assemblage rejeté a une colonne `concat_duration`.
+
+### Banc
+
+- T20 : source AV1 10 bits dont la vidéo commence à 7 ms, encodée par un worker (logiciel, puis GPU) avec le serveur, avec un passage serveur → worker : 11509/11509 images, aucune en double. 175 tests unitaires.
+
 ## Worker 0.7.13 — 01/11/2026
 
 ### Corrigé
