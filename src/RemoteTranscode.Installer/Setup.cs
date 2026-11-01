@@ -207,10 +207,164 @@ internal static class Setup
         if (o.Launch)
         {
             progress.Report((99, "Lancement d'Emby Remote Worker…"));
-            Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, WorkingDirectory = folder });
+            Launch(exe, folder, o.StartWithWindows);
         }
         progress.Report((100, "Installation terminée."));
         return folder;
+    }
+
+    /// <summary>Messages worth keeping for a quiet run (the setup writes them to its log file).</summary>
+    public static Action<string> Log { get; set; } = _ => { };
+
+    /// <summary>
+    /// Starts the worker after an installation. From session 0 (setup run over OpenSSH, a service...) a plain start
+    /// would give a worker without desktop nor tray icon: it is started in this user's interactive session through a
+    /// one-shot scheduled task (interactive token, no password nor administrator rights needed), or not at all when
+    /// the user has no open session.
+    /// </summary>
+    private static void Launch(string exe, string folder, bool startsWithWindows)
+    {
+        using (var self = Process.GetCurrentProcess())
+        {
+            if (self.SessionId != 0)
+            {
+                Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, WorkingDirectory = folder });
+                return;
+            }
+        }
+        string later = startsWithWindows ? "il démarrera à la prochaine ouverture de session" : "lancez-le depuis le menu Démarrer";
+        if (!HasInteractiveSession())
+        {
+            Log($"installation hors session interactive et aucune session ouverte : worker non lancé ({later})");
+            return;
+        }
+        try
+        {
+            if (LaunchInInteractiveSession(exe, folder))
+                Log("worker lancé dans la session interactive de l'utilisateur");
+            else
+                Log($"le worker n'a pas pu être lancé dans la session interactive ({later})");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Log($"lancement dans la session interactive en échec : {e.Message} ({later})");
+        }
+    }
+
+    /// <summary>True when this user has a desktop session open (its shell runs in a session other than 0).</summary>
+    private static bool HasInteractiveSession()
+    {
+        string? me = CurrentUserSid();
+        if (me is null)
+            return false;
+        foreach (var p in Process.GetProcessesByName("explorer").Concat(Process.GetProcessesByName("sihost")))
+        {
+            using (p)
+            {
+                try
+                {
+                    if (p.SessionId != 0 && QueryProcess(p.Id).Owner is { } owner && string.Equals(owner, me, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Registers a task for this user with an interactive token (runs in its desktop session), runs it, waits for the
+    /// worker to show up, then deletes the task. The XML form sets what schtasks' switches cannot: normal priority
+    /// (tasks default to below normal, inherited by ffmpeg), no 72 h time limit, allowed on battery.
+    /// </summary>
+    private static bool LaunchInInteractiveSession(string exe, string folder)
+    {
+        string sid = CurrentUserSid() ?? throw new InvalidOperationException("utilisateur courant inconnu");
+        string task = "EmbyRemoteWorker-Launch-" + Guid.NewGuid().ToString("N")[..8];
+        string xmlPath = Path.Combine(Path.GetTempPath(), task + ".xml");
+        string xml = $"""
+            <?xml version="1.0" encoding="UTF-16"?>
+            <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+              <RegistrationInfo><Description>Lancement unique de {AppName} après sa mise à jour (supprimée aussitôt).</Description></RegistrationInfo>
+              <Principals>
+                <Principal id="Author">
+                  <UserId>{sid}</UserId>
+                  <LogonType>InteractiveToken</LogonType>
+                  <RunLevel>LeastPrivilege</RunLevel>
+                </Principal>
+              </Principals>
+              <Settings>
+                <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+                <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+                <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+                <AllowStartOnDemand>true</AllowStartOnDemand>
+                <Enabled>true</Enabled>
+                <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+                <Priority>4</Priority>
+              </Settings>
+              <Actions Context="Author">
+                <Exec>
+                  <Command>{System.Security.SecurityElement.Escape(exe)}</Command>
+                  <WorkingDirectory>{System.Security.SecurityElement.Escape(folder)}</WorkingDirectory>
+                </Exec>
+              </Actions>
+            </Task>
+            """;
+        File.WriteAllText(xmlPath, xml, System.Text.Encoding.Unicode);
+        try
+        {
+            if (!SchTasks($"/create /tn \"{task}\" /xml \"{xmlPath}\" /f"))
+                return false;
+            try
+            {
+                if (!SchTasks($"/run /tn \"{task}\""))
+                    return false;
+                // The task is only deleted once the worker runs (deleting it does not stop its process).
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+                while (DateTime.UtcNow < deadline)
+                {
+                    var running = RunningFrom(folder);
+                    running.ForEach(p => p.Dispose());
+                    if (running.Count > 0)
+                        return true;
+                    Thread.Sleep(250);
+                }
+                return false;
+            }
+            finally
+            {
+                SchTasks($"/delete /tn \"{task}\" /f");
+            }
+        }
+        finally
+        {
+            try { File.Delete(xmlPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    private static bool SchTasks(string arguments)
+    {
+        var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "schtasks.exe"), arguments)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        using var p = Process.Start(psi) ?? throw new InvalidOperationException("schtasks introuvable");
+        var stdout = p.StandardOutput.ReadToEndAsync();
+        string stderr = p.StandardError.ReadToEnd();
+        if (!p.WaitForExit(30_000))
+        {
+            try { p.Kill(); } catch (InvalidOperationException) { }
+            Log($"schtasks {arguments.Split(' ')[0]} : délai dépassé");
+            return false;
+        }
+        if (p.ExitCode != 0)
+            Log($"schtasks {arguments.Split(' ')[0]} : code {p.ExitCode} {stderr.Trim()} {stdout.Result.Trim()}");
+        return p.ExitCode == 0;
     }
 
     /// <summary>Throws, with nothing modified, if any existing target file cannot be overwritten.</summary>
@@ -387,14 +541,20 @@ internal static class Setup
     // The bundled FFmpeg programs (ffmpeg\ folder of the installation).
     private static readonly string[] BundledTools = ["ffmpeg", "ffprobe"];
 
+    /// <summary>
+    /// Session-independent twin of the "-exit" event (Global\ namespace, no privilege needed for an event): lets a setup
+    /// run from another session of the same user (OpenSSH runs in session 0) ask the tray worker of session 1 to quit.
+    /// </summary>
+    public static string GlobalExitEventName => @"Global\" + InstanceName[@"Local\".Length..] + "-exit";
+
     private static void CloseWorkers(string folder)
     {
         // First the way the tray's "Quitter" does it (the running worker hands its jobs back), then, for an older
-        // version without that signal or one that does not answer, a forced stop.
-        if (EventWaitHandle.TryOpenExisting(InstanceName + "-exit", out var exit))
+        // version without that signal or one that does not answer, a forced stop. The session-local event reaches a
+        // worker of this session; otherwise the Global\ one reaches a worker of another session of this user (only one
+        // is set: a leftover signaled event could make the relaunched worker quit at once).
+        if (SignalExit(InstanceName + "-exit") || SignalExit(GlobalExitEventName))
         {
-            using (exit)
-                exit.Set();
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
             while (DateTime.UtcNow < deadline)
             {
@@ -406,6 +566,22 @@ internal static class Setup
             }
         }
         Kill(RunningFrom(folder));
+    }
+
+    private static bool SignalExit(string name)
+    {
+        try
+        {
+            if (!EventWaitHandle.TryOpenExisting(name, out var exit))
+                return false;
+            using (exit)
+                exit.Set();
+            return true;
+        }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException or WaitHandleCannotBeOpenedException)
+        {
+            return false;
+        }
     }
 
     private static void Kill(List<Process> processes)
@@ -426,35 +602,82 @@ internal static class Setup
         }
     }
 
-    /// <summary>Processes named <paramref name="name"/> (the worker by default) of this user's session started from <paramref name="folder"/>; the caller disposes them.</summary>
+    /// <summary>
+    /// Processes named <paramref name="name"/> (the worker by default) of this user, in any of its sessions (a setup
+    /// run over OpenSSH is in session 0, the tray worker in the interactive one), started from <paramref name="folder"/>;
+    /// the caller disposes them. Processes of other users, or whose owner/path cannot be read, are never returned.
+    /// </summary>
     private static List<Process> RunningFrom(string folder, string name = ProcessName)
     {
         using var current = Process.GetCurrentProcess();
-        int session = current.SessionId;
+        string? me = CurrentUserSid();
         var found = new List<Process>();
         foreach (var p in Process.GetProcessesByName(name))
         {
-            try
-            {
-                // The worker uninstalling itself is not one to close.
-                if (p.Id == current.Id)
-                {
-                    p.Dispose();
-                    continue;
-                }
-                // MainModule throws for processes of other users / higher integrity: those are skipped.
-                if (p.SessionId == session && p.MainModule?.FileName is { } path && IsInside(Path.GetFullPath(path), folder))
-                {
-                    found.Add(p);
-                    continue;
-                }
-            }
-            catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException)
-            {
-            }
-            p.Dispose();
+            // The worker uninstalling itself is not one to close.
+            if (me != null && p.Id != current.Id && QueryProcess(p.Id) is { Owner: { } owner, Path: { } path }
+                && string.Equals(owner, me, StringComparison.OrdinalIgnoreCase) && IsInside(path, folder))
+                found.Add(p);
+            else
+                p.Dispose();
         }
         return found;
+    }
+
+    private static string? CurrentUserSid()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        return identity.User?.Value;
+    }
+
+    /// <summary>
+    /// Executable path and owner SID of a process, read with the least access right (query-limited), which works across
+    /// sessions for this user's processes; null fields when access is denied or the process is gone.
+    /// </summary>
+    private static (string? Path, string? Owner) QueryProcess(int pid)
+    {
+        const int ProcessQueryLimitedInformation = 0x1000;
+        const int TokenQuery = 0x0008;
+        using var process = Native.OpenProcess(ProcessQueryLimitedInformation, false, pid);
+        if (process.IsInvalid)
+            return (null, null);
+        string? path = null, owner = null;
+        var buffer = new char[32768];
+        int size = buffer.Length;
+        if (Native.QueryFullProcessImageName(process, 0, buffer, ref size))
+            path = new string(buffer, 0, size);
+        if (Native.OpenProcessToken(process, TokenQuery, out var token))
+        {
+            using (token)
+            {
+                try
+                {
+                    using var identity = new System.Security.Principal.WindowsIdentity(token.DangerousGetHandle());
+                    owner = identity.User?.Value;
+                }
+                catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException or ArgumentException)
+                {
+                }
+            }
+        }
+        return (path, owner);
+    }
+
+    private static class Native
+    {
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        public static extern Microsoft.Win32.SafeHandles.SafeProcessHandle OpenProcess(int access, bool inherit, int processId);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+            EntryPoint = "QueryFullProcessImageNameW")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        public static extern bool QueryFullProcessImageName(Microsoft.Win32.SafeHandles.SafeProcessHandle process, int flags,
+            [System.Runtime.InteropServices.Out] char[] buffer, ref int size);
+
+        [System.Runtime.InteropServices.DllImport("advapi32.dll", SetLastError = true)]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        public static extern bool OpenProcessToken(Microsoft.Win32.SafeHandles.SafeProcessHandle process, int access,
+            out Microsoft.Win32.SafeHandles.SafeAccessTokenHandle token);
     }
 
     private static bool RunValuePointsInside(RegistryKey run, string folder) =>

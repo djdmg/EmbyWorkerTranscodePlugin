@@ -349,7 +349,7 @@ Tab « Paramètres ». Click « Enregistrer » (Save) to apply, « Annuler » (C
 | « Conversions : encodage par le GPU » (Conversions: encoding on the GPU) | off | Faster. If a slice is then resumed on the server, one file mixes two encoders (see limitations). |
 | « Lectures : encodage par le GPU » (Playbacks: encoding on the GPU) | off | Much faster on a laptop. The picture from the worker and from the server is slightly different. Off = same encoder as the server, so hand-overs are invisible. |
 | « Décodage vidéo par le GPU quand l'encodage s'y fait » (GPU video decoding when encoding on the GPU) | on | Relieves the processor; identical picture. Only used when one of the two options above is on. Falls back to the processor automatically if needed. |
-| « HDR → SDR (tone mapping) par le GPU quand il a été validé au démarrage » (HDR → SDR tone mapping on the GPU when validated at start-up) | on | Much faster and relieves the processor (see 7.3). Off: the worker no longer receives conversions tone mapped on the GPU and tone maps playback on the processor. Changing it reconnects the worker. |
+| « HDR → SDR (tone mapping) par le GPU quand il a été validé au démarrage » (HDR → SDR tone mapping on the GPU when validated at start-up) | on | Much faster and relieves the processor (see 7.3). Off: the worker no longer receives conversions tone mapped on the GPU and tone maps playback on the processor. Changing it reconnects the worker. On an NVIDIA or AMD card, Resizable BAR must be enabled in the BIOS (see 7.3). |
 | « Tâches simultanées maximum » (Maximum simultaneous jobs) | 2 | A conversion only uses a free slot. |
 | « Refaire la détection du matériel » (Detect hardware again) | — | Re-tests the encoders, for example after a driver update. |
 | « Manuel » / « Automatique » (Availability mode) | Manual, 10 min | See 6.4. |
@@ -409,6 +409,8 @@ When Emby converts an HDR movie to SDR, the tone mapping is done with standard F
 The choice is made **once per conversion**, when Emby starts it: on the graphics card if at least one connected worker has validated it, otherwise on the processor. Every slice of the episode then uses the same method, so the whole file looks the same: a conversion on the graphics card is only given to workers that can do it (never to the server), and if none of them is connected for 30 minutes it goes back to Emby. A conversion on the processor can still go to any worker and to the server.
 
 A worker whose graphics-card tone mapping fails three times stops using it until it is restarted (playback falls back to the processor; conversions on the graphics card go to other workers). To switch it off for good, untick « HDR → SDR (tone mapping) par le GPU… » in the worker settings (6.5).
+
+**NVIDIA or AMD graphics card: enable Resizable BAR.** On these cards, the graphics-card tone mapping needs Resizable BAR, enabled in the PC's BIOS (usually: « Above 4G Decoding » on, CSM off, « Re-Size BAR Support » on). Without it, the worker refuses the graphics-card tone mapping at start-up (its log shows « image incorrecte » and suggests enabling Resizable BAR) and stays on the processor. To check: NVIDIA Control Panel → System Information → Resizable BAR, or run `nvidia-smi -q -d MEMORY`: the BAR1 total should be about the size of the video memory (256 MB means Resizable BAR is off). Since worker 0.7.16, a refused check is done again at every start-up, so restarting the worker after changing the BIOS is enough. An Intel integrated GPU shares the main memory and is not affected.
 
 Playback is tone mapped by the worker that runs it, on its graphics card if it has validated it, otherwise on the processor. If a playback moves from one worker to another with a different capability, the picture may change slightly from that point (colours and highlights), as it already does when a playback moves to the server.
 
@@ -482,7 +484,7 @@ Windows Settings → Apps → **Emby Remote Worker** → Uninstall. The program 
 | Emby server log | Dashboard → Logs, file `embyserver.txt` (Synology: `/var/packages/EmbyServer/var/logs`) | Plugin and coordinator messages (category "RemoteTranscode"): workers connecting and leaving, jobs, conversions. |
 | Emby transcode logs | Dashboard → Logs, files `ffmpeg-transcode-*.txt` | One per transcode; lines starting with `remote-transcode:` explain each decision and hand-over. |
 
-To share worker logs, use « Exporter (7 derniers jours)… »: secrets are masked. Emby's own logs contain client access tokens: check them before sharing.
+The worker deletes its own logs (daily and per-job) older than 7 days automatically (worker 0.7.16 or later). To share worker logs, use « Exporter (7 derniers jours)… »: secrets are masked. Emby's own logs contain client access tokens: check them before sharing.
 
 ### 9.2 Common situations
 

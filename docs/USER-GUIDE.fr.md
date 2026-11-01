@@ -349,7 +349,7 @@ Onglet « Paramètres ». Cliquez sur « Enregistrer » pour appliquer, « Annul
 | « Conversions : encodage par le GPU » | désactivé | Plus rapide. Si une tranche est ensuite reprise par le serveur, un même fichier mélange deux encodeurs (voir les limites). |
 | « Lectures : encodage par le GPU » | désactivé | Bien plus rapide sur un portable. L'image du worker et celle du serveur diffèrent un peu. Désactivé = même encodeur que le serveur, donc bascules invisibles. |
 | « Décodage vidéo par le GPU quand l'encodage s'y fait » | activé | Soulage le processeur ; image identique. Ne sert que si l'une des deux options précédentes est cochée. Repli automatique sur le processeur si besoin. |
-| « HDR → SDR (tone mapping) par le GPU quand il a été validé au démarrage » | activé | Bien plus rapide et soulage le processeur (voir 7.3). Décoché : le worker ne reçoit plus de conversion tone mappée sur le GPU et fait le tone mapping des lectures sur le processeur. Le changement reconnecte le worker. |
+| « HDR → SDR (tone mapping) par le GPU quand il a été validé au démarrage » | activé | Bien plus rapide et soulage le processeur (voir 7.3). Décoché : le worker ne reçoit plus de conversion tone mappée sur le GPU et fait le tone mapping des lectures sur le processeur. Le changement reconnecte le worker. Sur une carte NVIDIA ou AMD, Resizable BAR doit être activé dans le BIOS (voir 7.3). |
 | « Tâches simultanées maximum » | 2 | Une conversion n'occupe qu'un emplacement libre. |
 | « Refaire la détection du matériel » | — | Teste de nouveau les encodeurs, par exemple après une mise à jour de pilote. |
 | « Manuel » / « Automatique » (mode de disponibilité) | Manuel, 10 min | Voir 6.4. |
@@ -409,6 +409,8 @@ Quand Emby convertit un film HDR en SDR, la conversion des couleurs (tone mappin
 Le choix est fait **une fois par conversion**, quand Emby la lance : sur la carte graphique si au moins un worker connecté l'a validé, sinon sur le processeur. Toutes les tranches de l'épisode utilisent ensuite la même méthode, pour que tout le fichier ait le même rendu : une conversion sur la carte graphique n'est confiée qu'aux workers qui savent la faire (jamais au serveur), et si aucun n'est connecté pendant 30 minutes elle est rendue à Emby. Une conversion sur le processeur peut toujours aller à n'importe quel worker et au serveur.
 
 Un worker dont le tone mapping par la carte graphique échoue trois fois cesse de l'utiliser jusqu'à son redémarrage (les lectures repassent sur le processeur ; les conversions sur la carte graphique vont aux autres workers). Pour le désactiver durablement, décocher « HDR → SDR (tone mapping) par le GPU… » dans les paramètres du worker (6.5).
+
+**Carte graphique NVIDIA ou AMD : activez Resizable BAR.** Sur ces cartes, le tone mapping par la carte graphique a besoin de Resizable BAR, à activer dans le BIOS du PC (en général : « Above 4G Decoding » activé, CSM désactivé, « Re-Size BAR Support » activé). Sans lui, le worker refuse le tone mapping par la carte graphique au démarrage (son journal indique « image incorrecte » et conseille d'activer Resizable BAR) et reste sur le processeur. Pour vérifier : Panneau de configuration NVIDIA → Informations système → Resizable BAR, ou la commande `nvidia-smi -q -d MEMORY` : le total BAR1 doit être à peu près la taille de la mémoire vidéo (256 Mo signifie que Resizable BAR est désactivé). Depuis le worker 0.7.16, un refus est revérifié à chaque démarrage : après le changement du BIOS, il suffit de redémarrer le worker. Un iGPU Intel partage la mémoire centrale et n'est pas concerné.
 
 Une lecture est tone mappée par le worker qui la fait, sur sa carte graphique s'il l'a validée, sinon sur le processeur. Si une lecture passe d'un worker à un autre de capacité différente, l'image peut changer légèrement à partir de ce moment (couleurs, hautes lumières), comme c'est déjà le cas quand une lecture passe sur le serveur.
 
@@ -482,7 +484,7 @@ Paramètres Windows → Applications → **Emby Remote Worker** → Désinstalle
 | Journal du serveur Emby | Tableau de bord → Journaux, fichier `embyserver.txt` (Synology : `/var/packages/EmbyServer/var/logs`) | Messages du plugin et du coordinateur (catégorie « RemoteTranscode ») : connexions et départs des workers, tâches, conversions. |
 | Journaux de transcodage d'Emby | Tableau de bord → Journaux, fichiers `ffmpeg-transcode-*.txt` | Un par transcodage ; les lignes qui commencent par `remote-transcode:` expliquent chaque décision et chaque bascule. |
 
-Pour partager les journaux d'un worker, utilisez « Exporter (7 derniers jours)… » : les secrets sont masqués. Les journaux d'Emby contiennent les jetons d'accès des clients : relisez-les avant de les partager.
+Le worker efface lui-même ses journaux (du jour et des tâches) de plus de 7 jours (worker 0.7.16 ou plus récent). Pour partager les journaux d'un worker, utilisez « Exporter (7 derniers jours)… » : les secrets sont masqués. Les journaux d'Emby contiennent les jetons d'accès des clients : relisez-les avant de les partager.
 
 ### 9.2 Situations fréquentes
 

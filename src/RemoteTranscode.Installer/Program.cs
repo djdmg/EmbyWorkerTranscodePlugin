@@ -12,6 +12,7 @@ internal static class Program
     {
         bool quiet = Has(args, "--quiet");
         bool kill = !Has(args, "--no-kill");
+        Setup.Log = Log;
         ApplicationConfiguration.Initialize();
         try
         {

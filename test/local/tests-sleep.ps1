@@ -559,3 +559,142 @@ function T22 {
         "source : $($src.Frames) images, vidéo {0:0.000}s, fichier {1:0.0}s | sortie : $oText | runs lancés : $idle | « $($ends -join ' ') » | final : $(Prop $r.Summary 'Status') | contrôle : « $($verify -join ' / ') » | code $code" -f $src.Duration, $full)
     Ensure-Workers @('w1', 'w2')
 }
+
+# ---- EncodeAudioAhead : preuves de synchro (ajouté le 01/11 pour la validation de l'audio converti à l'avance) ----
+
+function Initialize-ClassicShim {
+    New-Item -ItemType Directory -Force (Split-Path $Paths.ShimClassic) | Out-Null
+    Copy-Item $Paths.Shim $Paths.ShimClassic -Force
+    Write-ShimConfig $Paths.ShimClassic -useAudioAhead $false
+}
+
+# Audio d'un fichier (1re piste) : du 1er paquet à la fin du dernier.
+function Measure-Audio([string]$file) {
+    $pk = @(& $Paths.ServerFfprobe -v error -select_streams a:0 -show_entries packet=pts_time,duration_time -of csv=p=0 $file)
+    $min = [double]::MaxValue; $max = 0.0; $n = 0
+    foreach ($l in $pk) {
+        $f = "$l".Split(',')
+        if (-not $f[0] -or $f[0] -eq 'N/A') { continue }
+        $t = [double]::Parse($f[0], [cultureinfo]::InvariantCulture)
+        $d = if ($f.Count -gt 1 -and $f[1] -and $f[1] -ne 'N/A') { [double]::Parse($f[1], [cultureinfo]::InvariantCulture) } else { 0 }
+        $n++; if ($t -lt $min) { $min = $t }; if ($t + $d -gt $max) { $max = $t + $d }
+    }
+    [pscustomobject]@{ Packets = $n; Duration = $max - $min; First = $min }
+}
+
+# Conversion par le relais donné (HDR possible) ; rend la sortie, le code et ce que dit le relais.
+function Invoke-AheadConversion([string]$src, [string]$name, [string]$exe, [switch]$Hdr) {
+    $out = Join-Path $Paths.Out "conv-$name.mp4"
+    $s = Start-Shim (New-ConversionArgs -InputPath $src -OutputPath $out -Hdr:$Hdr) $name $exe
+    $code = Wait-Exit $s 1800
+    [pscustomobject]@{
+        Out = $out; Code = $code; Summary = Encode-Summary $out
+        Assembly = Get-AssemblySeconds "shim-$name"
+        Ahead = [bool](Log-Excerpt "shim-$name" 'audio converti à l''avance par le serveur' 1)
+        Verify = @(Log-Excerpt "shim-$name" 'source .*sultat|rejet' 2)
+    }
+}
+
+# T22 avec EncodeAudioAhead : vidéo arrêtée 34 s avant l'audio. Même conversion en assemblage classique (relais
+# shim-classic) et avec l'audio converti à l'avance : mêmes images que la source, audio entier, audio identique.
+#   pwsh -File run-tests.ps1 -Only T22A
+function T22A {
+    Restart-BenchCoordinator @{ EncodeAudioAhead = $true } 'coordinator-before-t22a'
+    try { T22ACore } finally { Restart-BenchCoordinator @{} 'coordinator-t22a' }
+}
+
+function T22ACore {
+    Ensure-Workers @('w1') -Only
+    Initialize-ClassicShim
+    $short = Join-Path $Paths.Media 'film_hdr10_shortvideo.mkv'
+    if (-not (Test-Path $short)) {
+        & $Paths.ServerFfmpeg -v error -y -stream_loop 1 -an -i $HDR -stream_loop 2 -vn -i $HDR -map 0:v -map 1:a -c copy -t 274 $short
+    }
+    $fd = 1 / 25
+    $srcV = Measure-Video $short; $srcA = Measure-Audio $short
+    $c = Invoke-AheadConversion $short 't22a-classic' $Paths.ShimClassic -Hdr
+    $a = Invoke-AheadConversion $short 't22a-ahead' $Paths.Shim -Hdr
+    $used = @(Log-Excerpt 'coordinator' 'audio converted ahead and checked' 5) | Select-Object -Last 1
+    $cmp = Compare-Conversions $c.Out $a.Out
+    $outV = Measure-Video $a.Out; $outA = Measure-Audio $a.Out
+    $ok = $c.Code -eq 0 -and $a.Code -eq 0 -and -not $c.Ahead -and $a.Ahead -and $cmp.Ok -and (Prop $a.Summary 'Status') -eq 'Completed' `
+        -and $outV.Frames -eq $srcV.Frames -and [math]::Abs($outA.Duration - $srcA.Duration) -le $fd `
+        -and ($a.Verify -join ' ') -match 'sultat' -and ($a.Verify -join ' ') -notmatch 'rejet'
+    Add-Result 'T22A' 'Vidéo plus courte que l''audio, avec l''audio converti à l''avance : même audio que l''assemblage classique' $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+        "source : $($srcV.Frames) images, vidéo {0:0.000}s, audio {1:0.000}s | sortie : $($outV.Frames) images, vidéo {2:0.000}s, audio {3:0.000}s (écart {4:+0.0;-0.0} ms) | audio à l'avance utilisé : $($a.Ahead) « $used » | assemblage classique {5} s, à l'avance {6} s | $($cmp.Text) | contrôle : « $($a.Verify -join ' / ') » | final : $(Prop $a.Summary 'Status')" -f $srcV.Duration, $srcA.Duration, $outV.Duration, $outA.Duration, (($outA.Duration - $srcA.Duration) * 1000), $c.Assembly, $a.Assembly)
+    Ensure-Workers @('w1', 'w2')
+}
+
+# Source de synchro : 10 min, 23,976 i/s, un éclair blanc de 2 images et un bip de 80 ms (1 kHz) au même instant toutes
+# les 360 images (≈ 15 s) à partir de l'image 80 ; vidéo décalée de 7 ms comme Mr. Robot (bip 7 ms avant l'éclair).
+function Initialize-SyncMedia {
+    $dst = Join-Path $Paths.Media 'film_sync.mkv'
+    if (Test-Path $dst) { return $dst }
+    $tmp = Join-Path $Paths.Media 'film_sync.tmp.mkv'
+    $t0 = '(80*1001/24000)'; $p = '(360*1001/24000)'
+    & $Paths.WorkerFfmpeg -hide_banner -v error -y `
+        -f lavfi -i "color=c=black:s=1280x720:r=24000/1001:d=600,drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='gte(n,80)*lt(mod(n-80,360),2)'" `
+        -f lavfi -i "aevalsrc='if(gte(t,$t0)*lt(mod(t-$t0,$p),0.08),0.5*sin(2*PI*1000*t),0)':s=48000:d=600" `
+        -c:v libx264 -preset veryfast -g 96 -pix_fmt yuv420p -c:a ac3 -b:a 192k $tmp
+    if ($LASTEXITCODE) { throw 'génération de la source de synchro en échec' }
+    & $Paths.ServerFfmpeg -hide_banner -v error -y -itsoffset 0.007 -i $tmp -i $tmp -map 0:v -map 1:a -c copy $dst
+    if ($LASTEXITCODE) { throw 'remux de la source de synchro en échec' }
+    Remove-Item $tmp -Force
+    $dst
+}
+
+# Instants des éclairs (début de chaque série d'images claires) et des bips (fin de chaque silence) ; écart bip - éclair
+# de chaque repère, en ms. Même décalage de départ pour les deux flux (ffmpeg sans -copyts) : l'écart est celui du fichier.
+function Measure-SyncMarkers([string]$file) {
+    $inv = [cultureinfo]::InvariantCulture
+    $flashes = @(); $t = $null; $bright = $false
+    foreach ($l in @(& $Paths.ServerFfmpeg -hide_banner -i $file -map 0:v:0 -vf 'scale=64:36,signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG' -f null - 2>&1)) {
+        $s = "$l"
+        if ($s -match 'pts_time:([-\d.e]+)') { $t = [double]::Parse($Matches[1], $inv) }
+        elseif ($s -match 'YAVG=([\d.]+)') {
+            $isBright = [double]::Parse($Matches[1], $inv) -gt 128
+            if ($isBright -and -not $bright) { $flashes += $t }
+            $bright = $isBright
+        }
+    }
+    $beeps = @(& $Paths.ServerFfmpeg -hide_banner -i $file -map 0:a:0 -af 'silencedetect=n=-30dB:d=1' -f null - 2>&1 |
+        ForEach-Object { if ("$_" -match 'silence_end: ([-\d.e]+)') { [double]::Parse($Matches[1], $inv) } })
+    $offsets = @(foreach ($f in $flashes) {
+        $b = $beeps | Sort-Object { [math]::Abs($_ - $f) } | Select-Object -First 1
+        if ($null -ne $b -and [math]::Abs($b - $f) -lt 1) { ($b - $f) * 1000 }
+    })
+    [pscustomobject]@{ Flashes = $flashes.Count; Beeps = $beeps.Count; Offsets = $offsets
+        Mean = if ($offsets) { ($offsets | Measure-Object -Average).Average } else { $null }
+        Min = if ($offsets) { ($offsets | Measure-Object -Minimum).Minimum } else { $null }
+        Max = if ($offsets) { ($offsets | Measure-Object -Maximum).Maximum } else { $null } }
+}
+
+# Lip-sync mesuré : source à repères (éclair + bip), conversion classique et avec l'audio converti à l'avance (w1, w2 et
+# serveur) ; écart bip - éclair de chaque repère dans la sortie contre la source, et audio identique entre les deux.
+#   pwsh -File run-tests.ps1 -Only T23
+function T23 {
+    Restart-BenchCoordinator @{ EncodeAudioAhead = $true } 'coordinator-before-t23'
+    try { T23Core } finally { Restart-BenchCoordinator @{} 'coordinator-t23' }
+}
+
+function T23Core {
+    Ensure-Workers @('w1', 'w2')
+    Initialize-ClassicShim
+    $src = Initialize-SyncMedia
+    $fd = 1001 / 24000
+    $srcV = Measure-Video $src; $srcA = Measure-Audio $src
+    $c = Invoke-AheadConversion $src 't23-classic' $Paths.ShimClassic
+    $a = Invoke-AheadConversion $src 't23-ahead' $Paths.Shim
+    $cmp = Compare-Conversions $c.Out $a.Out
+    $ms = Measure-SyncMarkers $src; $mc = Measure-SyncMarkers $c.Out; $ma = Measure-SyncMarkers $a.Out
+    $drift = @(for ($i = 0; $i -lt [math]::Min($ms.Offsets.Count, $ma.Offsets.Count); $i++) { $ma.Offsets[$i] - $ms.Offsets[$i] })
+    $worst = if ($drift) { ($drift | ForEach-Object { [math]::Abs($_) } | Measure-Object -Maximum).Maximum } else { $null }
+    $outV = Measure-Video $a.Out; $outA = Measure-Audio $a.Out
+    $ok = $c.Code -eq 0 -and $a.Code -eq 0 -and $a.Ahead -and -not $c.Ahead -and $cmp.Ok -and (Prop $a.Summary 'Status') -eq 'Completed' `
+        -and $outV.Frames -eq $srcV.Frames -and [math]::Abs($outA.Duration - $srcA.Duration) -le $fd `
+        -and $ms.Offsets.Count -ge 39 -and $ma.Offsets.Count -eq $ms.Offsets.Count -and $null -ne $worst -and $worst -le 10 `
+        -and ($a.Verify -join ' ') -match 'sultat' -and ($a.Verify -join ' ') -notmatch 'rejet'
+    $f = { param($m) if ($m.Offsets) { '{0} repères, bip-éclair moy {1:+0.0;-0.0} ms [{2:+0.0;-0.0} ; {3:+0.0;-0.0}]' -f $m.Offsets.Count, $m.Mean, $m.Min, $m.Max } else { "aucun repère ($($m.Flashes) éclairs, $($m.Beeps) bips)" } }
+    Add-Result 'T23' 'Lip-sync mesuré (éclair + bip) avec l''audio converti à l''avance' $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+        "source : $(& $f $ms) | classique : $(& $f $mc) | à l'avance : $(& $f $ma) | écart à la source au pire {0:0.0} ms | images source/sortie $($srcV.Frames)/$($outV.Frames) | audio source {1:0.000}s, sortie {2:0.000}s | assemblage classique {3} s, à l'avance {4} s | workers : $(Prop $a.Summary 'Worker') | $($cmp.Text) | contrôle : « $($a.Verify -join ' / ') »" -f $worst, $srcA.Duration, $outA.Duration, $c.Assembly, $a.Assembly)
+}

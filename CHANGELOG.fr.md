@@ -6,6 +6,22 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.29 et worker 0.7.17 — 01/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.29).
+
+### Modifié
+
+- **Plugin** — Le tone mapper HDR → SDR d'une conversion n'est plus figé à sa capture mais au démarrage de sa première tranche (`toneMappingDecided` dans l'état). Jusque-là, il est réévalué à chaque passage du planificateur selon les workers connectés. Pendant `EncodeToneMapperGraceSeconds` (60 s) après le démarrage du coordinateur, une conversion HDR qu'aucun worker connecté ne sait tone mapper sur le GPU attend au lieu de partir sur le processeur, tant qu'un worker appairé n'est pas encore connecté : Emby relance ses conversions dans la seconde qui suit son démarrage, avant le retour des workers, et tout l'épisode restait figé sur le processeur (constaté le 01/11, deux fois plus lent). zscale et libplacebo ne sont toujours jamais mélangés dans un même fichier.
+
+### Corrigé
+
+- **Installeur** — Une mise à jour lancée depuis une autre session Windows du même utilisateur (par exemple par SSH, en session 0, pendant que le worker tourne sur le bureau) ferme désormais le worker : les processus sont reconnus par leur propriétaire et leur dossier d'installation dans toutes les sessions, le worker écoute aussi un événement de sortie `Global\`, et ce qui tourne encore après 20 s est fermé. Depuis une session sans bureau, le worker est relancé dans la session de bureau de l'utilisateur par une tâche planifiée ponctuelle, ou à la prochaine ouverture de session si aucune n'est ouverte. Auparavant, la mise à jour échouait (« fichier utilisé »).
+
+### Banc
+
+- T23 : synchronisation mesurée avec 40 repères flash + bip sur 10 minutes, tranches encodées par deux workers et le serveur : même écart avec et sans `EncodeAudioAhead` (−0,2 ms). T22A : vidéo plus courte que l'audio avec `EncodeAudioAhead`. `EncodeAudioAhead` reste désactivé jusqu'à sa vérification avec le ffmpeg 5.1 d'Emby sur un vrai serveur.
+
 ## Plugin 0.7.28 et worker 0.7.16 — 01/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.28).

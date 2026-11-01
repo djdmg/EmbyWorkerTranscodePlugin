@@ -98,7 +98,19 @@ public sealed class EncodeTask
     public required string Output { get; init; }
     /// <summary>Video part of Emby's command, with placeholders (see <see cref="EmbyConversionPlanner"/>).</summary>
     public required string[] ChunkTemplate { get; init; }
-    public required JobRequirements Requirements { get; init; }
+    /// <summary>
+    /// Changed only by the scheduler loop, and only its tone mapper while <see cref="ToneMappingFinal"/> is false (see
+    /// <see cref="ToneMappingDecision"/>).
+    /// </summary>
+    public required JobRequirements Requirements { get; set; }
+
+    /// <summary>
+    /// The HDR → SDR tone mapper of <see cref="Requirements"/> is final: a run of this conversion started (on a worker or
+    /// on the server). Before that it is chosen again at every scheduling pass. Always true without HDR.
+    /// </summary>
+    [JsonIgnore]
+    public bool ToneMappingFinal { get; set; }
+
     public EncodeStatus Status { get; set; } = EncodeStatus.Pending;
     /// <summary>Failed runs on the server; workers that fail are set aside instead (<see cref="FailedWorkers"/>).</summary>
     public int Attempts { get; set; }
@@ -401,6 +413,9 @@ public sealed class EncodeQueue : IJobOwner
     private LocalRun? localRun;
     // Measured conversion speed of each worker (id → source seconds per second, smoothed), for the end of conversions.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, double> workerSpeeds = new();
+    // When the coordinator started (this singleton is built at start-up): workers reconnect from then on, see
+    // EncodeToneMapperGraceSeconds.
+    private readonly DateTimeOffset startedAt = DateTimeOffset.UtcNow;
 
     /// <summary>A slice encode running on the server itself because no worker was available any more.</summary>
     private sealed class LocalRun
@@ -517,10 +532,12 @@ public sealed class EncodeQueue : IJobOwner
             Input = plan.Input,
             Output = plan.Output,
             ChunkTemplate = plan.ChunkTemplate,
-            // HDR → SDR frozen now for the whole conversion: on the GPU (libplacebo) when a connected worker validated it,
-            // and then only such workers take its slices (never the server, whose ffmpeg has no libplacebo); otherwise
-            // zscale everywhere. Never both in one file: the renderings differ slightly.
+            // HDR → SDR: on the GPU (libplacebo) when a connected worker validated it, and then only such workers take
+            // its slices (never the server, whose ffmpeg has no libplacebo); otherwise zscale everywhere. Never both in
+            // one file: the renderings differ slightly. Provisional until the first run starts (DecideToneMapping):
+            // after an Emby restart the conversion arrives before the workers have reconnected.
             Requirements = WorkerMatching.WithToneMapping(plan.Requirements!, dispatcher.ConnectedCapabilities()),
+            ToneMappingFinal = !EmbyFilters.NeedsToneMapping(plan.Requirements!.Filters),
             Source = source,
             Shim = shim,
             Slices = await SlicesAsync(plan.Input, source.DurationSeconds, token),
@@ -538,8 +555,8 @@ public sealed class EncodeQueue : IJobOwner
         if (options.EncodeAudioAhead && plan.AudioAhead is null)
             logger.LogInformation("Conversion {Id}: audio converted at assembly ({Reason})", task.Id, plan.AudioAheadReason);
         if (EmbyFilters.NeedsToneMapping(task.Requirements.Filters))
-            logger.LogInformation("Conversion {Id}: HDR to SDR with {ToneMapper}", task.Id,
-                task.Requirements.ToneMapping == ToneMapper.Libplacebo ? "libplacebo (GPU, capable workers only)" : "zscale (CPU)");
+            logger.LogInformation("Conversion {Id}: HDR to SDR with {ToneMapper} for now, decided at first slice", task.Id,
+                ToneMapperName(task.Requirements.ToneMapping));
         Wake();
         return new ShimAssigned(task.Id, "workers");
     }
@@ -775,6 +792,9 @@ public sealed class EncodeQueue : IJobOwner
                 await GiveUpAsync(task, $"source inaccessible : {ex.Message}", report: false);
                 continue;
             }
+            // HDR → SDR not final yet: chosen again from the workers connected now, or nothing starts yet.
+            if (!DecideToneMapping(task))
+                continue;
             // Waiting slices in order, each to a free worker, until no worker takes one.
             List<EncodeSlice> waiting;
             lock (gate)
@@ -786,6 +806,79 @@ public sealed class EncodeQueue : IJobOwner
             }
         }
     }
+
+    /// <summary>
+    /// While no run of an HDR conversion has started, its tone mapper is chosen again (<see cref="ToneMappingDecision"/>)
+    /// from the workers connected now; false when nothing of it may start yet (grace period after the coordinator's
+    /// start, see EncodeToneMapperGraceSeconds). Only the scheduler loop changes <see cref="EncodeTask.Requirements"/>,
+    /// and it plans (PlanFor) and claims slices in the same pass, so every run of a conversion gets the same mode.
+    /// </summary>
+    private bool DecideToneMapping(EncodeTask task)
+    {
+        lock (gate)
+        {
+            if (task.ToneMappingFinal)
+                return true;
+            // Safety net: something of it exists already (a run's chunks, even of a run that ended before its offer
+            // was answered): its mode is the conversion's.
+            if (task.Slices.Any(s => s.IsRunning || s.Done) || task.Chunks.Count > 0)
+            {
+                FreezeToneMapping(task, "chunks already there");
+                return true;
+            }
+        }
+        var outcome = ToneMappingDecision.Decide(task.Requirements, dispatcher.ConnectedCapabilities(), DateTimeOffset.UtcNow - startedAt,
+            TimeSpan.FromSeconds(Math.Max(0, options.EncodeToneMapperGraceSeconds)), PairedWorkersMissing);
+        lock (gate)
+        {
+            if (task.ToneMappingFinal || !task.IsActive)
+                return true;
+            if (outcome.Requirements.ToneMapping != task.Requirements.ToneMapping)
+            {
+                logger.LogInformation("Conversion {Id}: HDR to SDR with {ToneMapper} for now (workers changed), decided at first slice",
+                    task.Id, ToneMapperName(outcome.Requirements.ToneMapping));
+                task.Requirements = outcome.Requirements;
+            }
+            if (!outcome.Wait)
+                return true;
+            const string Waiting = "en attente des workers (redémarrage) : tone mapping HDR choisi au démarrage de la première tranche";
+            if (task.Note != Waiting)
+            {
+                logger.LogInformation("Conversion {Id}: no GPU tone mapping worker connected yet, waiting up to {Grace}s after start-up before zscale",
+                    task.Id, options.EncodeToneMapperGraceSeconds);
+                Touch(task, Waiting);
+            }
+            return false;
+        }
+    }
+
+    /// <summary>Some paired, not revoked worker is not connected now (it may be reconnecting).</summary>
+    private bool PairedWorkersMissing()
+    {
+        try
+        {
+            var connected = dispatcher.Workers.Where(w => w.IsOpen && w.Hello != null).Select(w => w.Identity.Id).ToHashSet();
+            return dispatcher.Store?.Load().Any(w => !w.Revoked && !connected.Contains(w.Id)) == true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return true;   // unknown: the grace period is short anyway
+        }
+    }
+
+    /// <summary>The first run of the conversion starts: its tone mapper is kept for every slice. Call under the lock.</summary>
+    private void FreezeToneMapping(EncodeTask task, string machine)
+    {
+        if (task.ToneMappingFinal)
+            return;
+        task.ToneMappingFinal = true;
+        if (EmbyFilters.NeedsToneMapping(task.Requirements.Filters))
+            logger.LogInformation("Conversion {Id}: HDR to SDR with {ToneMapper}, decided at first slice ({Machine}, {Seconds:0}s after capture)",
+                task.Id, ToneMapperName(task.Requirements.ToneMapping), machine, (DateTimeOffset.UtcNow - task.CreatedAt).TotalSeconds);
+    }
+
+    private static string ToneMapperName(ToneMapper mode) =>
+        mode == ToneMapper.Libplacebo ? "libplacebo (GPU, capable workers only)" : "zscale (CPU)";
 
     /// <summary>
     /// Whether the local run should stop so a free worker continues its slice. Alongside workers, only once nothing of
@@ -926,6 +1019,9 @@ public sealed class EncodeQueue : IJobOwner
         }
         lock (gate)
         {
+            // A worker took the run: the tone mapper it was planned with is the conversion's from now on. (A refused
+            // offer leaves it open: nothing was encoded, the next pass may still choose with the workers then connected.)
+            FreezeToneMapping(task, job.Worker.Identity.Name);
             // Cancelled by Emby while the offer was in flight, or this run already ended (its JobEnded/loss was
             // processed right after the answer): the job is not wanted, or is already over.
             if (!task.IsActive || slice.JobId != job.Id)
@@ -1256,6 +1352,8 @@ public sealed class EncodeQueue : IJobOwner
             if (!task.IsActive || task.Status == EncodeStatus.Assembling || slice.Done || slice.IsRunning || slice.ReservedFor != null
                 || (alongside ? task.Slices.Any(s => s.Worker == LocalWorkerName) : task.Slices.Any(s => s.IsRunning)))
                 return;
+            // The server's runs are always zscale (a libplacebo conversion never passes ServerCanEncodeAsync).
+            FreezeToneMapping(task, LocalWorkerName);
             slice.Worker = LocalWorkerName;
             slice.JobId = null;
             slice.RunStartSeconds = startSeconds;

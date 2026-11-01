@@ -67,6 +67,16 @@ public sealed class CoordinatorOptions
     public int EncodeLocalDelaySeconds { get; set; } = 20;
 
     /// <summary>
+    /// An HDR → SDR conversion's tone mapper is chosen when its first slice starts (libplacebo when a connected worker
+    /// can, zscale otherwise) and kept for the whole file. During this many seconds after the coordinator starts, a
+    /// conversion that would start in zscale while some paired worker has not reconnected yet waits instead (on workers
+    /// and on the server alike): after an Emby restart, Emby relaunches its conversions before the workers are back, and
+    /// the GPU worker would otherwise miss the whole episode. Measured from the coordinator's start, not from the
+    /// capture: later on, a GPU worker that is not connected is off, and nothing should wait for it. 0: never wait.
+    /// </summary>
+    public int EncodeToneMapperGraceSeconds { get; set; } = 60;
+
+    /// <summary>
     /// A conversion the server cannot encode itself (it lacks a filter the workers use) keeps trying to place its
     /// waiting slices on the workers this long (set-aside workers retried, see EncodeSetAsideRetryMinutes) while
     /// nothing runs, before it is given back to Emby, which then converts it with its own command on the server.

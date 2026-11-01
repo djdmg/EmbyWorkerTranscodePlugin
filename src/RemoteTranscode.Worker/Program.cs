@@ -47,6 +47,9 @@ internal static partial class Program
         using var releaseRequest = new EventWaitHandle(false, EventResetMode.AutoReset, instance + "-release");
         // Set by the setup before an update or by the uninstall: quit like the tray's "Quitter" (jobs handed back).
         using var exitRequest = new EventWaitHandle(false, EventResetMode.AutoReset, instance + "-exit");
+        // Same request from a setup run in another session of this user (e.g. over OpenSSH, session 0), which cannot
+        // see the session-local one. Its default security only admits this user; a failure only loses that path.
+        using var globalExitRequest = TryCreateEvent(@"Global\" + instance[@"Local\".Length..] + "-exit");
         if (!first)
         {
             // Already running: bring its window up instead of starting a second worker.
@@ -86,7 +89,8 @@ internal static partial class Program
         releaser.Start();
         var exiter = new Thread(() =>
         {
-            if (exitRequest.WaitOne())
+            WaitHandle[] exitRequests = globalExitRequest is null ? [exitRequest] : [exitRequest, globalExitRequest];
+            if (WaitHandle.WaitAny(exitRequests) >= 0)
             {
                 logger.Log("fermeture demandée (mise à jour ou désinstallation)");
                 tray.ExitFromAnotherInstance();
@@ -96,6 +100,18 @@ internal static partial class Program
         Application.Run(tray);
         logger.Log("arrêt");
         return 0;
+    }
+
+    private static EventWaitHandle? TryCreateEvent(string name)
+    {
+        try
+        {
+            return new EventWaitHandle(false, EventResetMode.AutoReset, name);
+        }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException or WaitHandleCannotBeOpenedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>One instance per configuration folder (several workers can run on one PC for tests).</summary>

@@ -8,6 +8,22 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.29 and worker 0.7.17 — 2026-11-01
+
+Built and published by GitHub Actions (release v0.7.29).
+
+### Changed
+
+- **Plugin** — The HDR → SDR tone mapper of a conversion is no longer frozen when the conversion is captured but when its first slice starts (`toneMappingDecided` in the status). Until then it is re-evaluated at every scheduler pass from the connected workers. For `EncodeToneMapperGraceSeconds` (60 s) after the coordinator starts, an HDR conversion that no connected worker can tone map on the GPU waits instead of starting on the processor, as long as some paired worker is not connected yet: Emby relaunches its conversions within a second of starting, before the workers are back, and the whole episode used to be frozen on the processor (seen on 2026-11-01, two times slower). zscale and libplacebo are still never mixed in one file.
+
+### Fixed
+
+- **Installer** — An update started from another Windows session of the same user (for example over SSH, in session 0, while the worker runs on the desktop) now closes the worker: processes are matched by owner and install folder in any session, the worker also listens to a `Global\` exit event, and anything still running after 20 s is closed. From a session without a desktop, the worker is relaunched in the user's desktop session through a one-shot scheduled task, or at the next logon if no desktop session is open. Before, the update failed with "file in use".
+
+### Bench
+
+- T23: lip-sync measured with 40 flash + beep markers over 10 minutes, slices encoded by two workers and the server: same offset with and without `EncodeAudioAhead` (−0.2 ms). T22A: video shorter than audio with `EncodeAudioAhead`. `EncodeAudioAhead` stays off until it is checked with Emby's ffmpeg 5.1 on a real server.
+
 ## Plugin 0.7.28 and worker 0.7.16 — 2026-11-01
 
 Built and published by GitHub Actions (release v0.7.28).
