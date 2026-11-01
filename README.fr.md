@@ -118,8 +118,8 @@ Les versions se règlent dans `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.Em
 
 | Élément | Version |
 |---|---|
-| Plugin | 0.7.27 |
-| Worker et installeur | 0.7.15, avec icône, décodage et tone mapping par le GPU (build FFmpeg « full » : installeur d'environ 218 Mo au lieu de 170 Mo). Les workers 0.7.7 à 0.7.14 restent compatibles mais font le tone mapping sur le processeur et ne reçoivent jamais de conversion tone mappée sur le GPU (en outre : 0.7.9 n'affiche le compteur de la file d'Emby que pendant une tâche, 0.7.7 et 0.7.8 ne l'affichent pas, 0.7.7 sans l'avancement des conversions) |
+| Plugin | 0.7.28 |
+| Worker et installeur | 0.7.16, avec icône, décodage et tone mapping par le GPU (Resizable BAR nécessaire sur les cartes NVIDIA et AMD), journaux gardés 7 jours (build FFmpeg « full » : installeur d'environ 218 Mo au lieu de 170 Mo). Les workers 0.7.7 à 0.7.14 restent compatibles mais font le tone mapping sur le processeur et ne reçoivent jamais de conversion tone mappée sur le GPU (en outre : 0.7.9 n'affiche le compteur de la file d'Emby que pendant une tâche, 0.7.7 et 0.7.8 ne l'affichent pas, 0.7.7 sans l'avancement des conversions) |
 | Emby Server testé | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 sans GPU) ; ffmpeg d'Emby 5.1 (fork) |
 | Client testé | Emby Web dans Chrome (lecteur hls.js 1.6.0-beta.2) |
 | Workers testés | Windows 11 Entreprise, Intel Core Ultra 5 225U (x264 et QSV) ; PC avec RTX 4080 (x264 et NVENC, environ 10x sur un épisode 1080p) ; FFmpeg 9.0.2 |

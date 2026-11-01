@@ -221,8 +221,8 @@ public static class CapabilityCache
     {
         var info = new FileInfo(ffmpeg);
         // A different ffmpeg build or a driver update (part of the GPU names) invalidates the cache.
-        // "v2": full filter list since phase 3. "v3": hardware decoders. "v4": GPU tone mapping (0.7.15).
-        string key = $"v4|{info.FullName}|{info.Length}|{info.LastWriteTimeUtc:O}|{string.Join(";", CapabilityProbe.Gpus())}";
+        // "v2": full filter list since phase 3. "v3": hardware decoders. "v4": GPU tone mapping (0.7.15). "v5": 0.7.16.
+        string key = $"v5|{info.FullName}|{info.Length}|{info.LastWriteTimeUtc:O}|{string.Join(";", CapabilityProbe.Gpus())}";
         if (!force && File.Exists(CachePath))
         {
             try
@@ -231,7 +231,20 @@ public static class CapabilityCache
                 if (cached?.Key == key)
                 {
                     log($"capacités reprises du cache : {string.Join(", ", cached.Capabilities.VideoEncoders)}");
-                    return cached.Capabilities;
+                    var caps0 = cached.Capabilities;
+                    // A refused GPU tone mapping is never kept: a BIOS setting (Resizable BAR) or the memory other
+                    // programs hold can change it without any change to ffmpeg or the drivers. A few seconds per start.
+                    if (caps0.GpuToneMapping is null && caps0.Filters.Contains("libplacebo"))
+                    {
+                        var probed = await CapabilityProbe.GpuToneMappingAsync(ffmpeg, caps0.Filters, caps0.VideoEncoders, log);
+                        log($"tone mapping GPU validé : {(probed is null ? "aucun" : $"{probed.Method} ({probed.Device})")}");
+                        if (probed != null)
+                        {
+                            caps0 = caps0 with { GpuToneMapping = probed };
+                            File.WriteAllText(CachePath, JsonSerializer.Serialize(new Entry(key, caps0)));
+                        }
+                    }
+                    return caps0;
                 }
             }
             catch (JsonException) { }

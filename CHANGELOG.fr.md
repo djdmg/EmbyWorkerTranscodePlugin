@@ -6,6 +6,20 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.28 et worker 0.7.16 — 01/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.28).
+
+### Corrigé
+
+- **Plugin** — La dernière tranche d'une vidéo qui s'arrête avant la fin du fichier se termine désormais vraiment. En 0.7.27, un worker repris sur la toute dernière image rendait à chaque exécution un morceau d'une image, déjà encodée : chaque exécution comptait comme un progrès, la tranche était relancée sans fin et une copie de plus de cette image était gardée à chaque fois. Une exécution qui ne termine pas sa tranche et fait avancer sa fin encodée de moins d'une demi-seconde est désormais une exécution vide, et ses morceaux sont abandonnés ; deux exécutions vides de suite sur la dernière tranche la terminent là où la vidéo s'arrête, trois sur une autre tranche comptent comme un échec. Test de banc T22 (vidéo HDR arrêtée 34 s avant son audio) : 6000 images en entrée et en sortie, audio complet, contrôle de la conversion réussi.
+- **Worker** — Un refus du tone mapping GPU n'est plus gardé dans le cache des capacités : la sonde est refaite à chaque démarrage (quelques secondes) jusqu'à ce qu'elle réussisse, car un réglage du BIOS ou la mémoire tenue par d'autres programmes peut changer le résultat sans que ffmpeg ni les pilotes changent. Le cache est renouvelé une fois par cette version.
+
+### Ajouté
+
+- **Worker** — Les journaux du worker et des tâches de plus de 7 jours sont effacés automatiquement (à la première ligne écrite chaque jour). Un worker très sollicité avait écrit plus de 5 700 journaux de tâches en quelques jours.
+- **Worker** — Quand la sonde du tone mapping GPU échoue parce que la mémoire Vulkan est refusée (`VK_ERROR_OUT_OF_DEVICE_MEMORY`), le journal le dit et conseille d'activer Resizable BAR. Constaté sur un PC avec une RTX 4080 dont Resizable BAR était désactivé : fenêtre BAR de 256 Mo, presque pleine, où libplacebo crée ses tables ; avec Resizable BAR, la sonde donne 28,9 dB comme sur un iGPU Intel.
+
 ## Plugin 0.7.27 — 01/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.27). Worker inchangé (0.7.15).

@@ -13,6 +13,10 @@ public sealed partial class Logger
     private readonly LinkedList<string> tail = new();
     private const int TailSize = 2000;
 
+    /// <summary>Worker and job logs older than this many days are deleted (at the first line written each day).</summary>
+    public const int RetentionDays = 7;
+    private DateTime prunedOn;
+
     /// <summary>Raised on the logging thread (any thread); subscribers marshal to the UI themselves.</summary>
     public event Action<string>? LineWritten;
 
@@ -31,6 +35,11 @@ public sealed partial class Logger
         string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {Mask(message)}";
         lock (gate)
         {
+            if (prunedOn != DateTime.Today)
+            {
+                prunedOn = DateTime.Today;
+                Prune(WorkerConfig.LogsDirectory, DateTime.Now.AddDays(-RetentionDays));
+            }
             try
             {
                 Directory.CreateDirectory(WorkerConfig.LogsDirectory);
@@ -45,6 +54,33 @@ public sealed partial class Logger
         try { Console.WriteLine(line); } catch (IOException) { }
         // A window being closed on the UI thread may refuse the BeginInvoke: not the caller's problem.
         try { LineWritten?.Invoke(line); } catch (InvalidOperationException) { }
+    }
+
+    /// <summary>
+    /// Deletes the worker and job logs last written before <paramref name="before"/> (a busy worker writes thousands
+    /// of job logs a week). Files in use or locked are skipped; never throws.
+    /// </summary>
+    public static int Prune(string directory, DateTime before)
+    {
+        int deleted = 0;
+        try
+        {
+            if (!Directory.Exists(directory))
+                return 0;
+            foreach (var file in new DirectoryInfo(directory).EnumerateFiles("*.log")
+                .Where(f => (f.Name.StartsWith("job-", StringComparison.OrdinalIgnoreCase) || f.Name.StartsWith("worker-", StringComparison.OrdinalIgnoreCase))
+                    && f.LastWriteTime < before))
+            {
+                try
+                {
+                    file.Delete();
+                    deleted++;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return deleted;
     }
 
     public string[] Tail()

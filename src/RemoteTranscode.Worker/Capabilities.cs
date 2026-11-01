@@ -78,7 +78,7 @@ public static class CapabilityProbe
     /// desat=0). An exit code 0 proves nothing: some drivers return corrupted pictures without an error. Each Vulkan
     /// device (the encoders' GPUs first, then the default one) is tried as is, then with <see cref="SafeVulkanOptions"/>.
     /// </summary>
-    private static async Task<GpuToneMapping?> GpuToneMappingAsync(string ffmpeg, string[] filters, IReadOnlyCollection<string> encoders, Action<string> log)
+    internal static async Task<GpuToneMapping?> GpuToneMappingAsync(string ffmpeg, string[] filters, IReadOnlyCollection<string> encoders, Action<string> log)
     {
         if (!new[] { "libplacebo", "hwupload", "hwdownload", "zscale", "tonemap", "psnr" }.All(filters.Contains))
         {
@@ -121,7 +121,10 @@ public static class CapabilityProbe
                     bool ok = result.ExitCode == 0 && psnr >= MinToneMappingPsnr;
                     log($"tone mapping GPU {init} : " + (ok ? $"OK (PSNR {psnr:0.0} dB)"
                         : result.ExitCode != 0 ? $"inutilisable ({ErrorLine(result.Output)})"
-                        : $"image incorrecte (PSNR {(psnr is null ? "?" : psnr.Value.ToString("0.0"))} dB < {MinToneMappingPsnr})"));
+                        : $"image incorrecte (PSNR {(psnr is null ? "?" : psnr.Value.ToString("0.0"))} dB < {MinToneMappingPsnr})"
+                            + (result.Output.Contains("VK_ERROR_OUT_OF_DEVICE_MEMORY", StringComparison.Ordinal)
+                                ? " : mémoire Vulkan refusée (VK_ERROR_OUT_OF_DEVICE_MEMORY) ; sur une carte NVIDIA ou AMD, activer Resizable BAR dans le BIOS (Above 4G Decoding activé, CSM désactivé)"
+                                : "")));
                     if (ok)
                         return new GpuToneMapping(GpuToneMapping.LibplaceboMethod, init);
                 }

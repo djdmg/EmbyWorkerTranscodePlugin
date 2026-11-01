@@ -526,3 +526,36 @@ function T21 {
         "capacité de w1 : « $($cap -join ' / ') » | mode : $mode | runs de w1 : $($jobs.Count), dont graphe libplacebo + device Vulkan : $($gpuLines.Count) ($device) | tranches sur le serveur : $($r.LocalRuns), workers : $($r.Workers -join ', ') | images source/sortie : $($src.Frames)/$($dst.Frames) | final : $(Prop $r.Summary 'Status') | contrôle : « $($verify -join ' / ') » | code $code | $($chk.Text)")
     Ensure-Workers @('w1', 'w2')
 }
+
+# Vidéo plus courte que l'audio (Narcos: Mexico S02E08, 4K Dolby Vision : vidéo arrêtée à 3403 s, fichier de 3437 s).
+# La dernière tranche s'arrête là où la vidéo s'arrête ; ses relances ne produisent rien ou un morceau d'une image déjà
+# encodée (worker 0.7.15). En 0.7.25 elle était relancée sans fin, en 0.7.27 une image s'ajoutait à chaque relance.
+# Attendu (0.7.28) : conversion terminée, autant d'images que la source, l'audio entier gardé, la fin de la vidéo notée
+# par le coordinateur, au plus 2 relances vides.
+#   pwsh -File run-tests.ps1 -Only T22
+function T22 {
+    Ensure-Workers @('w1') -Only
+    $short = Join-Path $Paths.Media 'film_hdr10_shortvideo.mkv'
+    if (-not (Test-Path $short)) {
+        & $Paths.ServerFfmpeg -v error -y -stream_loop 1 -an -i $HDR -stream_loop 2 -vn -i $HDR -map 0:v -map 1:a -c copy -t 274 $short
+    }
+    $src = Measure-Video $short
+    $full = (Probe $short).Duration
+    $out = Join-Path $Paths.Out 'conv-t22.mp4'
+    $t0 = Get-Date
+    $s = Start-Shim (New-ConversionArgs -InputPath $short -OutputPath $out -Hdr) 't22'
+    $code = Wait-Exit $s 1800
+    $r = Get-ConversionRunners $out
+    $ends = Log-Excerpt 'coordinator' 'the video ends at' 1
+    $idle = @(Select-String -Path (Join-Path $Paths.Logs 'coordinator.log') -Pattern "conversion $($r.Id) tranche" -ErrorAction SilentlyContinue).Count
+    $dst = if (Test-Path $out) { Measure-Video $out } else { $null }
+    $outDur = if (Test-Path $out) { (Probe $out).Duration } else { 0 }
+    $verify = Log-Excerpt 'shim-t22' 'source .*sultat|rejet' 1
+    $ok = $code -eq 0 -and (Prop $r.Summary 'Status') -eq 'Completed' -and $dst -and $dst.Frames -eq $src.Frames `
+        -and [math]::Abs($outDur - $full) -le 1.5 -and ($ends -join ' ') -match 'the video ends at' `
+        -and ($verify -join ' ') -match 'sultat' -and ($verify -join ' ') -notmatch 'rejet' -and ((Get-Date) - $t0).TotalMinutes -lt 30
+    $oText = if ($dst) { '{0} images, vidéo {1:0.000}s, fichier {2:0.0}s' -f $dst.Frames, $dst.Duration, $outDur } else { 'absente' }
+    Add-Result 'T22' 'Vidéo plus courte que l''audio : dernière tranche terminée à la fin de la vidéo, sans image en double' $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+        "source : $($src.Frames) images, vidéo {0:0.000}s, fichier {1:0.0}s | sortie : $oText | runs lancés : $idle | « $($ends -join ' ') » | final : $(Prop $r.Summary 'Status') | contrôle : « $($verify -join ' / ') » | code $code" -f $src.Duration, $full)
+    Ensure-Workers @('w1', 'w2')
+}

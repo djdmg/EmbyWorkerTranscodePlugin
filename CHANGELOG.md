@@ -8,6 +8,20 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.28 and worker 0.7.16 — 2026-11-01
+
+Built and published by GitHub Actions (release v0.7.28).
+
+### Fixed
+
+- **Plugin** — The last slice of a video that stops before the end of the file is now really finished. In 0.7.27 a worker resumed on the very last frame gave a chunk of one frame, already encoded, at every run: each run counted as progress, the slice was restarted forever and one more copy of that frame was kept each time. A run that does not complete its slice and moves its encoded end by less than half a second is now an idle run, and its chunks are dropped; two idle runs in a row on the last slice end it where the video ends, three on any other slice count as a failure. Bench test T22 (HDR video stopping 34 s before its audio): 6000 frames in and out, full audio kept, conversion check passed.
+- **Worker** — A refused GPU tone mapping is no longer kept in the capability cache: the probe runs again at each start (a few seconds) until it passes, since a BIOS setting or the memory other programs hold can change the result without any change to ffmpeg or the drivers. The cache is renewed once by this version.
+
+### Added
+
+- **Worker** — Worker and job logs older than 7 days are deleted automatically (at the first line written each day). A busy worker wrote more than 5,700 job logs in a few days.
+- **Worker** — When the GPU tone mapping probe fails because Vulkan memory is refused (`VK_ERROR_OUT_OF_DEVICE_MEMORY`), the log says so and suggests enabling Resizable BAR. Seen on a PC with an RTX 4080 whose Resizable BAR was off: a 256 MB BAR window, almost full, where libplacebo creates its lookup tables; with Resizable BAR on, the probe gives 28.9 dB as on an Intel iGPU.
+
 ## Plugin 0.7.27 — 2026-11-01
 
 Built and published by GitHub Actions (release v0.7.27). Worker unchanged (0.7.15).

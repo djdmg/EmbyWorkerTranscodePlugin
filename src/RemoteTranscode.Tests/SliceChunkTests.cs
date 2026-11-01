@@ -137,7 +137,7 @@ public class SliceChunkTests
     {
         var (task, slice) = VideoEndsEarly();
         Assert.False(task.Covers(slice));
-        Assert.True(task.RunWasIdle(slice));
+        Assert.True(task.DropIdleRun(slice));
         slice.IdleRuns = 1;
         Assert.False(task.EndsAtVideoEnd(slice));
         slice.IdleRuns = 2;
@@ -145,16 +145,30 @@ public class SliceChunkTests
     }
 
     [Fact]
-    public void A_run_with_a_chunk_is_not_idle_and_other_slices_never_end_early()
+    public void A_one_frame_chunk_of_the_last_frame_is_an_idle_run_and_is_dropped()
+    {
+        // Worker 0.7.15 resumed on the last frame: a chunk of that frame again, every run.
+        var (task, slice) = VideoEndsEarly();
+        task.Chunks.Add(new EncodeChunk(403, 566.107, 566.149, 1));
+        Assert.True(task.DropIdleRun(slice));
+        Assert.DoesNotContain(task.Chunks, c => c.Index == 403);
+        Assert.Equal(566.108, task.EncodedEnd(slice), 6);
+        slice.IdleRuns = 2;
+        Assert.True(task.EndsAtVideoEnd(slice));
+    }
+
+    [Fact]
+    public void A_run_with_new_video_is_not_idle_and_other_slices_never_end_early()
     {
         var (task, slice) = VideoEndsEarly();
         task.Chunks.Add(new EncodeChunk(403, 566.107, 570, 1));
-        Assert.False(task.RunWasIdle(slice));
+        Assert.False(task.DropIdleRun(slice));
+        Assert.Contains(task.Chunks, c => c.Index == 403);
 
         var middle = new EncodeSlice { Index = 1, Start = 120, End = 240, RunStartSeconds = 150, RunStartIndex = 101, IdleRuns = 5 };
         var t2 = Task(middle);
         t2.Chunks.Add(new EncodeChunk(100, 120, 150, 1));
-        Assert.True(t2.RunWasIdle(middle));
+        Assert.True(t2.DropIdleRun(middle));
         Assert.False(t2.EndsAtVideoEnd(middle));
     }
 

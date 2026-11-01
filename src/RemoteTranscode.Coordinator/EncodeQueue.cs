@@ -61,8 +61,9 @@ public sealed class EncodeSlice
     public bool EndingSignalled { get; set; }
 
     /// <summary>
-    /// Runs in a row that ended without error but without a single new chunk (see EncodeTask.RunWasIdle): two on the
-    /// last slice mean the video ends there; three anywhere else count as a failure, so a slice never loops forever.
+    /// Runs in a row that ended without error and without encoding half a second of new video (see
+    /// EncodeTask.DropIdleRun): two on the last slice mean the video ends there; three anywhere else count as a failure,
+    /// so a slice never loops forever.
     /// </summary>
     [JsonIgnore]
     public int IdleRuns { get; set; }
@@ -223,12 +224,26 @@ public sealed class EncodeTask
         }
     }
 
-    /// <summary>The slice's current run stored no chunk at all. Call before the next run is claimed.</summary>
-    public bool RunWasIdle(EncodeSlice slice) =>
-        !Chunks.Any(c => c.Index >= slice.RunStartIndex && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice);
+    /// <summary>Less new video than this (seconds) from a run that did not complete its slice makes it an idle run.</summary>
+    public const double MinRunProgressSeconds = 0.5;
 
     /// <summary>
-    /// The last slice resumed after its chunks and, twice in a row, ffmpeg ended normally without any frame to encode:
+    /// The slice's current run, which did not complete it, moved its encoded end by less than MinRunProgressSeconds:
+    /// nothing at all, or a chunk of a frame or two. Its chunks are dropped (a run resumed on the very last frame of a
+    /// video that stops before the file's end gives a one-frame chunk of a frame already encoded, and each such run
+    /// would add another copy: seen with worker 0.7.15 on 2026-11-01) and true is returned. Call once per run end,
+    /// before the next run is claimed.
+    /// </summary>
+    public bool DropIdleRun(EncodeSlice slice)
+    {
+        if (EncodedEnd(slice) >= slice.RunStartSeconds + MinRunProgressSeconds)
+            return false;
+        Chunks.RemoveAll(c => c.Index >= slice.RunStartIndex && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice);
+        return true;
+    }
+
+    /// <summary>
+    /// The last slice resumed after its chunks and, twice in a row, ffmpeg ended normally without new video to encode:
     /// the video stream ends there, before the file's duration (the audio runs on, e.g. a 4K Dolby Vision episode whose
     /// video stops 34 s before its audio). Its chunks are complete; the assembled file keeps the source's audio, and the
     /// shim's check compares the video spans. Seen on 2026-11-01: 0.7.25 took each such run for an interruption and
@@ -1387,10 +1402,11 @@ public sealed class EncodeQueue : IJobOwner
             {
                 slice.Worker = null;
                 slice.Speed = 0;
-                slice.IdleRuns = run.Process.ExitCode == 0 && !run.HandOver && task.RunWasIdle(slice) ? slice.IdleRuns + 1 : 0;
+                bool covers = !run.HandOver && run.Process.ExitCode == 0 && task.Covers(slice);
+                slice.IdleRuns = !covers && run.Process.ExitCode == 0 && !run.HandOver && task.DropIdleRun(slice) ? slice.IdleRuns + 1 : 0;
                 if (run.HandOver)
                     Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} confiée à un worker à partir de {task.EncodedEnd(slice):0}s");
-                else if (run.Process.ExitCode == 0 && task.Covers(slice))
+                else if (covers)
                 {
                     task.AlignRunEnd(slice);
                     slice.Done = true;
@@ -1898,8 +1914,9 @@ public sealed class EncodeQueue : IJobOwner
             slice.JobId = null;
             slice.Worker = null;
             slice.Speed = 0;
-            slice.IdleRuns = ended.Error is null && task.RunWasIdle(slice) ? slice.IdleRuns + 1 : 0;
-            if (ended.ExitCode == 0 && task.Covers(slice))
+            bool covers = ended.ExitCode == 0 && task.Covers(slice);
+            slice.IdleRuns = !covers && ended.Error is null && task.DropIdleRun(slice) ? slice.IdleRuns + 1 : 0;
+            if (covers)
             {
                 task.AlignRunEnd(slice);
                 slice.Done = true;
