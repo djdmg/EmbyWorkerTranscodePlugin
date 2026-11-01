@@ -1,0 +1,31 @@
+# Manual check of the ISSUE_REPORT_TOKEN secret the plugin embeds for its automatic failure reports: opens a test
+# issue with that token (label auto-report), then closes it. Run it from the Actions tab after changing the secret.
+name: Check issue-report token
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open and close a test issue with ISSUE_REPORT_TOKEN
+        env:
+          TOKEN: ${{ secrets.ISSUE_REPORT_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$TOKEN" ]; then echo "ISSUE_REPORT_TOKEN is not set"; exit 1; fi
+          body=$(jq -n --arg run "${{ github.server_url }}/${REPO}/actions/runs/${{ github.run_id }}" \
+            '{title: "Test: automatic issue reporting", labels: ["auto-report"],
+              body: ("Test issue opened by the token check workflow (" + $run + "). It is closed right away; nothing to do.")}')
+          created=$(curl -sS -f -X POST -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: EmbyDistributedTranscoding-token-check" "https://api.github.com/repos/$REPO/issues" -d "$body")
+          number=$(echo "$created" | jq -r .number)
+          echo "Created issue #$number"
+          curl -sS -f -X PATCH -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: EmbyDistributedTranscoding-token-check" "https://api.github.com/repos/$REPO/issues/$number" \
+            -d '{"state": "closed", "state_reason": "completed"}' > /dev/null
+          echo "Closed issue #$number: the token can open and close issues."
