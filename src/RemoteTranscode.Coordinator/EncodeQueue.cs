@@ -61,6 +61,13 @@ public sealed class EncodeSlice
     public bool EndingSignalled { get; set; }
 
     /// <summary>
+    /// Runs in a row that ended without error but without a single new chunk (see EncodeTask.RunWasIdle): two on the
+    /// last slice mean the video ends there; three anywhere else count as a failure, so a slice never loops forever.
+    /// </summary>
+    [JsonIgnore]
+    public int IdleRuns { get; set; }
+
+    /// <summary>
     /// The resume point last looked up in the source (see EncodeQueue.ResumePointAsync): the time listed by the
     /// previous run, and the source frame found for it (null: none close enough, the listed time is used).
     /// </summary>
@@ -215,6 +222,21 @@ public sealed class EncodeTask
             Chunks[i] = c with { Start = c.Index == slice.RunStartIndex ? c.Start : c.Start + shift, End = c.End + shift };
         }
     }
+
+    /// <summary>The slice's current run stored no chunk at all. Call before the next run is claimed.</summary>
+    public bool RunWasIdle(EncodeSlice slice) =>
+        !Chunks.Any(c => c.Index >= slice.RunStartIndex && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice);
+
+    /// <summary>
+    /// The last slice resumed after its chunks and, twice in a row, ffmpeg ended normally without any frame to encode:
+    /// the video stream ends there, before the file's duration (the audio runs on, e.g. a 4K Dolby Vision episode whose
+    /// video stops 34 s before its audio). Its chunks are complete; the assembled file keeps the source's audio, and the
+    /// shim's check compares the video spans. Seen on 2026-11-01: 0.7.25 took each such run for an interruption and
+    /// restarted the slice every 2 s for an hour.
+    /// </summary>
+    public bool EndsAtVideoEnd(EncodeSlice slice) =>
+        slice.Last && slice.IdleRuns >= 2 && slice.RunStartIndex > slice.FirstChunk
+        && ContiguousChunks(slice) == slice.RunStartIndex - slice.FirstChunk && Consistent(slice);
 
     /// <summary>Chunks of the slice from its first one without gap: where its next run resumes.</summary>
     public int ContiguousChunks(EncodeSlice slice)
@@ -1365,6 +1387,7 @@ public sealed class EncodeQueue : IJobOwner
             {
                 slice.Worker = null;
                 slice.Speed = 0;
+                slice.IdleRuns = run.Process.ExitCode == 0 && !run.HandOver && task.RunWasIdle(slice) ? slice.IdleRuns + 1 : 0;
                 if (run.HandOver)
                     Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} confiée à un worker à partir de {task.EncodedEnd(slice):0}s");
                 else if (run.Process.ExitCode == 0 && task.Covers(slice))
@@ -1374,6 +1397,8 @@ public sealed class EncodeQueue : IJobOwner
                     slice.DoneBy = ServerKind;
                     Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} terminée sur le serveur");
                 }
+                else if (task.EndsAtVideoEnd(slice))
+                    MarkVideoEnd(task, slice, ServerKind);
                 else if (++task.Attempts >= options.EncodeMaxAttempts)
                 {
                     lock (run.ErrorTail)
@@ -1873,12 +1898,29 @@ public sealed class EncodeQueue : IJobOwner
             slice.JobId = null;
             slice.Worker = null;
             slice.Speed = 0;
+            slice.IdleRuns = ended.Error is null && task.RunWasIdle(slice) ? slice.IdleRuns + 1 : 0;
             if (ended.ExitCode == 0 && task.Covers(slice))
             {
                 task.AlignRunEnd(slice);
                 slice.Done = true;
                 slice.DoneBy = MachineKind(task, job.Worker);
                 Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} encodée par {job.Worker.Identity.Name}");
+            }
+            else if (ended.ExitCode == 0 && task.EndsAtVideoEnd(slice))
+                MarkVideoEnd(task, slice, MachineKind(task, job.Worker));
+            else if (ended.Error is null && slice.IdleRuns >= 3)
+            {
+                // Ended "normally" three times in a row without a single chunk: not an interruption any more. Treated
+                // as a failure (worker set aside, retried later, conversion given back to Emby in the end) rather than
+                // restarted forever.
+                failure = $"ffmpeg s'est arrêté {slice.IdleRuns} fois de suite sans rien encoder à partir de {task.EncodedEnd(slice):0.###}s (code {ended.ExitCode})";
+                if (!task.FailedWorkers.Contains(job.Worker.Identity.Id))
+                    task.FailedWorkers.Add(job.Worker.Identity.Id);
+                foreach (var s in task.Slices.Where(s => s.ReservedFor == job.Worker.Identity.Id))
+                    s.ReservedFor = null;
+                logger.LogWarning("Conversion {Id}: slice {Slice} ended {Runs} times in a row without any chunk on {Worker}, set aside for this conversion",
+                    task.Id, slice.Index + 1, slice.IdleRuns, job.Worker.Identity.Name);
+                Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} : {failure} sur {job.Worker.Identity.Name}, ce worker est écarté de cette conversion");
             }
             else if (ended.Error is null)
             {
@@ -1939,6 +1981,17 @@ public sealed class EncodeQueue : IJobOwner
         task.FailedWorkers.Clear();
         task.SetAsideBlockedSince = null;
         Wake();
+    }
+
+    /// <summary>The last slice is done where its video stream ends (EncodeTask.EndsAtVideoEnd). Call under the lock.</summary>
+    private void MarkVideoEnd(EncodeTask task, EncodeSlice slice, string doneBy)
+    {
+        slice.Done = true;
+        slice.DoneBy = doneBy;
+        double end = task.EncodedEnd(slice);
+        logger.LogInformation("Conversion {Id}: the video ends at {End:0.###} s, {Gap:0.#} s before the source's duration: last slice done",
+            task.Id, end, (task.Source?.DurationSeconds ?? end) - end);
+        Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} terminée : la vidéo s'arrête à {end:0.###}s, avant la fin de l'audio");
     }
 
     /// <summary>Interruptions are not failures: the slice waits for a worker (or the server) and resumes from its last chunk.</summary>

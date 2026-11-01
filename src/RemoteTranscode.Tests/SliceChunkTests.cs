@@ -118,6 +118,59 @@ public class SliceChunkTests
         Assert.Equal(236.231, task.EncodedEnd(slice), 6);
     }
 
+    // Narcos: Mexico S02E08 (4K Dolby Vision): the file lasts 600 s here, its video stops at 566 s. The last slice's
+    // chunks reach 566 s, then every resumed run ends at once without a chunk.
+    private static (EncodeTask, EncodeSlice) VideoEndsEarly()
+    {
+        var slice = new EncodeSlice { Index = 4, Start = 480, End = 600, Last = true };
+        var task = Task(slice);
+        task.Chunks.Add(new EncodeChunk(400, 480, 510, 1));
+        task.Chunks.Add(new EncodeChunk(401, 510, 540, 1));
+        task.Chunks.Add(new EncodeChunk(402, 540, 566.108, 1));
+        slice.RunStartSeconds = 566.107;
+        slice.RunStartIndex = 403;
+        return (task, slice);
+    }
+
+    [Fact]
+    public void Last_slice_ends_where_the_video_ends_after_two_idle_runs()
+    {
+        var (task, slice) = VideoEndsEarly();
+        Assert.False(task.Covers(slice));
+        Assert.True(task.RunWasIdle(slice));
+        slice.IdleRuns = 1;
+        Assert.False(task.EndsAtVideoEnd(slice));
+        slice.IdleRuns = 2;
+        Assert.True(task.EndsAtVideoEnd(slice));
+    }
+
+    [Fact]
+    public void A_run_with_a_chunk_is_not_idle_and_other_slices_never_end_early()
+    {
+        var (task, slice) = VideoEndsEarly();
+        task.Chunks.Add(new EncodeChunk(403, 566.107, 570, 1));
+        Assert.False(task.RunWasIdle(slice));
+
+        var middle = new EncodeSlice { Index = 1, Start = 120, End = 240, RunStartSeconds = 150, RunStartIndex = 101, IdleRuns = 5 };
+        var t2 = Task(middle);
+        t2.Chunks.Add(new EncodeChunk(100, 120, 150, 1));
+        Assert.True(t2.RunWasIdle(middle));
+        Assert.False(t2.EndsAtVideoEnd(middle));
+    }
+
+    [Fact]
+    public void A_last_slice_with_no_chunk_or_a_gap_never_ends_early()
+    {
+        // Nothing encoded yet: the first run itself was idle.
+        var fresh = new EncodeSlice { Index = 4, Start = 480, End = 600, Last = true, RunStartSeconds = 480, RunStartIndex = 400, IdleRuns = 3 };
+        Assert.False(Task(fresh).EndsAtVideoEnd(fresh));
+        // A gap before the resume point.
+        var (task, slice) = VideoEndsEarly();
+        task.Chunks.RemoveAll(c => c.Index == 401);
+        slice.IdleRuns = 2;
+        Assert.False(task.EndsAtVideoEnd(slice));
+    }
+
     // A server slice of Mr. Robot S03E09 (AV1, video from 0.007 s) as Emby's ffmpeg cut it: small chunks first, then
     // 30 s ones, every listed end past the next chunk's start, the last one past the slice's end.
     private static (EncodeTask, EncodeSlice) OverlappingRun(double overlap, bool last = false, double end = 357.065)

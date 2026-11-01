@@ -8,6 +8,15 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.27 — 2026-11-01
+
+Built and published by GitHub Actions (release v0.7.27). Worker unchanged (0.7.15).
+
+### Fixed
+
+- **Plugin** — A conversion whose video stream stops before the end of the file (the audio runs on) no longer loops on its last slice. Since 0.7.25 a run that ends without an ffmpeg error counts as an interruption, so a last slice resumed where the video stops was restarted every 2 seconds without ever producing a chunk (seen on 2026-11-01: a 4K Dolby Vision episode whose video stops 34 s before its audio, an hour of restarts on both workers). Now the last slice is done once two runs in a row, resumed after its chunks, end normally without a single chunk: the video ends there. The assembled file keeps the source's audio, and the conversion check compares the video spans as before.
+- **Plugin** — Any slice whose runs end three times in a row without error but without a single chunk now counts as a failure (worker set aside, retried after 5 minutes, conversion given back to Emby after 30 minutes) instead of being restarted forever.
+
 ## Plugin 0.7.26 and worker 0.7.15 — 2026-11-01
 
 ### Added

@@ -6,6 +6,15 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.27 — 01/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.27). Worker inchangé (0.7.15).
+
+### Corrigé
+
+- **Plugin** — Une conversion dont la vidéo s'arrête avant la fin du fichier (l'audio continue) ne tourne plus en boucle sur sa dernière tranche. Depuis la 0.7.25, une exécution qui se termine sans erreur de ffmpeg compte comme une interruption : une dernière tranche reprise là où la vidéo s'arrête était relancée toutes les 2 secondes sans jamais produire de morceau (constaté le 01/11 : un épisode 4K Dolby Vision dont la vidéo s'arrête 34 s avant l'audio, une heure de relances sur les deux workers). Désormais la dernière tranche est terminée dès que deux exécutions de suite, reprises après ses morceaux, se terminent normalement sans aucun morceau : la vidéo s'arrête là. Le fichier assemblé garde l'audio de la source, et le contrôle de la conversion compare toujours les durées de la vidéo.
+- **Plugin** — Une tranche dont les exécutions se terminent trois fois de suite sans erreur mais sans aucun morceau compte désormais comme un échec (worker écarté, réessayé après 5 minutes, conversion rendue à Emby après 30 minutes) au lieu d'être relancée indéfiniment.
+
 ## Plugin 0.7.26 et worker 0.7.15 — 01/11/2026
 
 ### Ajouté
