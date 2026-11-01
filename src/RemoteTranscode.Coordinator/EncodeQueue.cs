@@ -987,7 +987,7 @@ public sealed class EncodeQueue : IJobOwner
             avoid: avoid);
         if (job is null)
         {
-            bool stillClaimed, nothingRuns, alongside;
+            bool stillClaimed, nothingRuns, alongside, reservedRefused = false;
             lock (gate)
             {
                 // Still claimed means no owner callback ended this run: it is ours to put back. Otherwise the run
@@ -1011,11 +1011,23 @@ public sealed class EncodeQueue : IJobOwner
                 alongside = stillClaimed && !nothingRuns && options.EncodeLocalAlongsideWorkers && slice.ReservedFor is null
                     && !task.Slices.Any(s => s.Worker == LocalWorkerName)
                     && !SlowerThanTheBusy(task, slice, BusyWorkers(task), [LocalWorkerName]).Any();
+                // A reserved slice is offered to its worker only: refused (the worker is connected but unavailable,
+                // e.g. its PC got busy), the reservation is dropped so any machine takes it from the next pass, and the
+                // slices after it are still offered in this pass. Before, the pass stopped at this slice and the
+                // conversion waited for that one worker while another sat idle (seen on 2026-11-01: 30 min, then the
+                // conversion was given back to Emby with 4 slices left).
+                if (stillClaimed && slice.ReservedFor is { } reservee)
+                {
+                    reservedRefused = true;
+                    slice.ReservedFor = null;
+                    logger.LogInformation("Conversion {Id}: slice {Slice} reserved for {Worker}, refused ({Why}): open to any machine",
+                        task.Id, slice.Index + 1, reservee, why);
+                }
             }
             // Otherwise the server steps in when no worker works on this conversion at all.
             if (stillClaimed && (nothingRuns || alongside))
                 await TryStartLocalAsync(task, slice, plan, startSeconds, token, alongside);
-            return false;
+            return reservedRefused;
         }
         lock (gate)
         {

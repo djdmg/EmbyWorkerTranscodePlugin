@@ -6,6 +6,14 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.30 — 01/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.30). Worker inchangé (0.7.17).
+
+### Corrigé
+
+- **Plugin** — Une tranche réservée à un worker (préchargée pendant qu'il encode sa tranche en cours) ne bloque plus la conversion quand ce worker devient indisponible sans se déconnecter (son PC est occupé). La tranche réservée n'était proposée qu'à ce worker et, refusée, arrêtait le passage du planificateur : les tranches suivantes n'étaient jamais proposées aux autres workers, pourtant libres. Constaté le 01/11 : un épisode 4K HDR a attendu 30 minutes avec un worker inactif, puis a été rendu à Emby avec 4 tranches restantes, qui l'a converti sur le processeur du serveur. Une tranche réservée refusée est désormais ouverte à toutes les machines, et le passage continue avec les tranches suivantes.
+
 ## Plugin 0.7.29 et worker 0.7.17 — 01/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.29).

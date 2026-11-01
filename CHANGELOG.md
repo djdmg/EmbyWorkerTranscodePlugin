@@ -8,6 +8,14 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.30 — 2026-11-01
+
+Built and published by GitHub Actions (release v0.7.30). Worker unchanged (0.7.17).
+
+### Fixed
+
+- **Plugin** — A slice reserved for a worker (fetched ahead while it encodes its current slice) no longer blocks the conversion when that worker becomes unavailable without disconnecting (its PC got busy). The reserved slice was offered to that worker only and, refused, stopped the scheduler pass: the following slices were never offered to the other, idle workers. Seen on 2026-11-01: a 4K HDR episode waited 30 minutes with one worker idle, then was given back to Emby with 4 slices left, which converted it on the server's processor. A refused reserved slice is now open to any machine and the pass goes on with the next slices.
+
 ## Plugin 0.7.29 and worker 0.7.17 — 2026-11-01
 
 Built and published by GitHub Actions (release v0.7.29).
