@@ -118,7 +118,7 @@ Les versions se règlent dans `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.Em
 
 | Élément | Version |
 |---|---|
-| Plugin | 0.7.24 |
+| Plugin | 0.7.25 |
 | Worker et installeur | 0.7.14, avec icône et décodage par le GPU (les workers 0.7.7 à 0.7.13 restent compatibles : 0.7.9 n'affiche le compteur de la file d'Emby que pendant une tâche, 0.7.7 et 0.7.8 ne l'affichent pas, 0.7.7 sans l'avancement des conversions) |
 | Emby Server testé | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 sans GPU) ; ffmpeg d'Emby 5.1 (fork) |
 | Client testé | Emby Web dans Chrome (lecteur hls.js 1.6.0-beta.2) |

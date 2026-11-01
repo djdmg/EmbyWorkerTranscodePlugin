@@ -8,6 +8,15 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.25 — 2026-11-01
+
+Built and published by GitHub Actions (release v0.7.25).
+
+### Fixed
+
+- **Plugin** — A worker closed or updated in the middle of a slice (its job ends early without any ffmpeg error) is no longer treated as failing: the slice resumes elsewhere from its last chunk and the worker stays welcome for that conversion. Real failures always carry ffmpeg's error lines and still set the worker aside. Seen on 2026-11-01: both workers were updated during one 4K HDR episode, both were set aside, and the last of 30 slices waited forever (the server cannot do HDR → SDR, and connected workers kept the give-up from starting).
+- **Plugin** — A conversion the server cannot encode itself keeps trying to place its slices on the workers for 30 minutes (`EncodeNoWorkerMinutes`, was 10) before it is given back to Emby, and this now also applies when workers are connected but none can take the slice. Workers set aside after a real failure are retried after 5 minutes (`EncodeSetAsideRetryMinutes`) when they are the only ones that could take the work.
+
 ## Plugin 0.7.24 — 2026-11-01
 
 ### Added

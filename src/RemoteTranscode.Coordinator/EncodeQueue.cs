@@ -144,6 +144,10 @@ public sealed class EncodeTask
     [JsonIgnore]
     public DateTimeOffset? WaitingSince { get; set; }
 
+    /// <summary>Since when a waiting slice found no machine while only set-aside workers could take it (EncodeSetAsideRetryMinutes).</summary>
+    [JsonIgnore]
+    public DateTimeOffset? SetAsideBlockedSince { get; set; }
+
     /// <summary>Types of the machines that ran slices of this conversion (never their names), for the failure reports.</summary>
     [JsonIgnore]
     public List<string> MachineKinds { get; } = [];
@@ -863,6 +867,7 @@ public sealed class EncodeQueue : IJobOwner
                     task.RefreshStatus();
                     if (task.Status == EncodeStatus.Pending)
                         task.Note = $"en attente d'un worker : {why}";
+                    ReadmitSetAsideWorkers(task);
                 }
                 nothingRuns = !task.Slices.Any(s => s.IsRunning);
                 // Workers are on this conversion: the server takes a slice of its own too, unless it is reserved for
@@ -886,6 +891,7 @@ public sealed class EncodeQueue : IJobOwner
                 return true;
             }
             task.WaitingSince = null;
+            task.SetAsideBlockedSince = null;
             if (!task.Participants.Contains(job.Worker.Identity.Name))
                 task.Participants.Add(job.Worker.Identity.Name);
             string kind = MachineKind(task, job.Worker);
@@ -1160,11 +1166,15 @@ public sealed class EncodeQueue : IJobOwner
         if (!await ServerCanEncodeAsync(plan.Requirements!, token))
         {
             // The server cannot encode these slices the way the workers do (e.g. no zscale for a translated
-            // supertonemap): it leaves them to the workers. Only when no capable worker is connected any more for
-            // EncodeNoWorkerMinutes is the conversion given back to Emby, which redoes it with its own command.
-            if (!alongside && !dispatcher.HasWorkerFor(plan.Requirements!) && task.WaitingSince is { } since
+            // supertonemap): it leaves them to the workers, retried every pass (set-aside ones too, after
+            // EncodeSetAsideRetryMinutes). Only when nothing could be placed for EncodeNoWorkerMinutes, whether workers
+            // are gone or connected but unable to take it, is the conversion given back to Emby, which redoes it with
+            // its own command on the server.
+            if (!alongside && task.WaitingSince is { } since
                 && DateTimeOffset.UtcNow - since >= TimeSpan.FromMinutes(options.EncodeNoWorkerMinutes))
-                await GiveUpAsync(task, "plus aucun worker capable connecté, et le serveur ne peut pas encoder ces morceaux", report: false);
+                await GiveUpAsync(task, dispatcher.HasWorkerFor(plan.Requirements!)
+                    ? $"aucun worker n'a pu reprendre la conversion pendant {options.EncodeNoWorkerMinutes} min, et le serveur ne peut pas encoder ces morceaux"
+                    : "plus aucun worker capable connecté, et le serveur ne peut pas encoder ces morceaux", report: false);
             return;
         }
 
@@ -1862,9 +1872,18 @@ public sealed class EncodeQueue : IJobOwner
                 slice.DoneBy = MachineKind(task, job.Worker);
                 Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} encodée par {job.Worker.Identity.Name}");
             }
+            else if (ended.Error is null)
+            {
+                // Ended early without an error from ffmpeg: the worker was closed or updated, or the job stopped
+                // (real failures always carry ffmpeg's error lines). An interruption, as in OnLostAsync: the slice
+                // resumes from its last chunk, and the worker stays welcome.
+                logger.LogInformation("Conversion {Id}: slice {Slice} stopped early on {Worker} without error (code {Code}), resumed elsewhere",
+                    task.Id, slice.Index + 1, job.Worker.Identity.Name, ended.ExitCode);
+                Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} interrompue sur {job.Worker.Identity.Name}, reprise à {task.EncodedEnd(slice):0}s");
+            }
             else
             {
-                failure = ended.Error ?? $"fin prématurée (code {ended.ExitCode}, tranche incomplète)";
+                failure = ended.Error;
                 // A failing worker is set aside for this conversion; only the server's own failures give it back to
                 // Emby (OnLocalEndedAsync). The slice waits for another worker, or the server after the usual delay.
                 if (!task.FailedWorkers.Contains(job.Worker.Identity.Id))
@@ -1872,8 +1891,8 @@ public sealed class EncodeQueue : IJobOwner
                 foreach (var s in task.Slices.Where(s => s.ReservedFor == job.Worker.Identity.Id))
                     s.ReservedFor = null;
                 logger.LogWarning("Conversion {Id}: {Worker} failed slice {Slice} ({Error}), set aside for this conversion",
-                    task.Id, job.Worker.Identity.Name, slice.Index + 1, ended.Error ?? "fin prématurée");
-                Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} : échec sur {job.Worker.Identity.Name} ({ended.Error ?? "fin prématurée"}), ce worker est écarté de cette conversion");
+                    task.Id, job.Worker.Identity.Name, slice.Index + 1, ended.Error);
+                Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} : échec sur {job.Worker.Identity.Name} ({ended.Error}), ce worker est écarté de cette conversion");
             }
             task.RefreshStatus();
         }
@@ -1881,6 +1900,36 @@ public sealed class EncodeQueue : IJobOwner
             ReportFailure(task, FailureKind.WorkerFailed, failure, job.Worker);
         if (giveUp != null)
             await GiveUpAsync(task, giveUp);
+        Wake();
+    }
+
+    /// <summary>
+    /// No machine took a waiting slice while the only capable workers connected are ones this conversion set aside:
+    /// after EncodeSetAsideRetryMinutes they are retried, so the conversion is rebalanced on the workers before the
+    /// EncodeNoWorkerMinutes give-up hands it back to Emby. Call under the lock.
+    /// </summary>
+    private void ReadmitSetAsideWorkers(EncodeTask task)
+    {
+        if (task.FailedWorkers.Count == 0)
+        {
+            task.SetAsideBlockedSince = null;
+            return;
+        }
+        bool setAsideConnected = dispatcher.Workers.Any(w => w.IsOpen && w.Hello != null && task.FailedWorkers.Contains(w.Identity.Id)
+            && WorkerMatching.Incompatibility(task.Requirements, w.Hello.Capabilities) is null);
+        if (!setAsideConnected)
+        {
+            task.SetAsideBlockedSince = null;
+            return;
+        }
+        var now = DateTimeOffset.UtcNow;
+        task.SetAsideBlockedSince ??= now;
+        if (now - task.SetAsideBlockedSince.Value < TimeSpan.FromMinutes(options.EncodeSetAsideRetryMinutes))
+            return;
+        logger.LogWarning("Conversion {Id}: no other machine for {Minutes} min, set-aside workers retried", task.Id, options.EncodeSetAsideRetryMinutes);
+        Touch(task, $"aucune autre machine depuis {options.EncodeSetAsideRetryMinutes} min : nouvel essai avec les workers écartés");
+        task.FailedWorkers.Clear();
+        task.SetAsideBlockedSince = null;
         Wake();
     }
 

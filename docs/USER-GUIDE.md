@@ -396,7 +396,7 @@ You start conversions **in Emby itself**, as usual: the « Convert » action on 
 | Burned-in subtitles | Server. |
 | Neither the workers nor the server can encode it | Emby's own conversion, as without the plugin. |
 
-A conversion is accepted as soon as a capable worker is connected **or** the server can encode the slices. A PC switched on in the middle of an episode joins in within about 10 seconds. If at least one worker is paired but none is connected yet (for example right after the server restarts), the conversion waits up to 10 minutes for one before going back to Emby, if the server cannot do the slices itself.
+A conversion is accepted as soon as a capable worker is connected **or** the server can encode the slices. A PC switched on in the middle of an episode joins in within about 10 seconds. If at least one worker is paired but none is connected yet (for example right after the server restarts), the conversion keeps trying to place its slices on the workers for up to 30 minutes before going back to Emby, if the server cannot do the slices itself. A worker that is closed or updated in the middle of a slice is not treated as failing: its slice resumes elsewhere and it stays welcome. A worker set aside after a real failure is tried again after 5 minutes if no other machine can take the work.
 
 ### 7.3 HDR to SDR
 

@@ -396,7 +396,7 @@ Les conversions se lancent **dans Emby**, comme d'habitude : action « Convertir
 | Sous-titres incrustés | Serveur. |
 | Ni les workers ni le serveur ne savent l'encoder | Conversion faite par Emby lui-même, comme sans le plugin. |
 
-Une conversion est acceptée dès qu'un worker capable est connecté **ou** que le serveur sait encoder les tranches. Un PC allumé au milieu d'un épisode s'y joint en une dizaine de secondes. Si au moins un worker est associé mais qu'aucun n'est encore connecté (par exemple juste après un redémarrage du serveur), la conversion attend jusqu'à 10 minutes avant de revenir à Emby, si le serveur ne peut pas encoder les tranches lui-même.
+Une conversion est acceptée dès qu'un worker capable est connecté **ou** que le serveur sait encoder les tranches. Un PC allumé au milieu d'un épisode s'y joint en une dizaine de secondes. Si au moins un worker est associé mais qu'aucun n'est encore connecté (par exemple juste après un redémarrage du serveur), la conversion continue d'essayer de placer ses tranches sur les workers pendant 30 minutes avant de revenir à Emby, si le serveur ne peut pas encoder les tranches lui-même. Un worker fermé ou mis à jour en pleine tranche n'est pas considéré en échec : sa tranche reprend ailleurs et il reste accepté. Un worker écarté après un vrai échec est réessayé au bout de 5 minutes si aucune autre machine ne peut prendre le travail.
 
 ### 7.3 HDR vers SDR
 

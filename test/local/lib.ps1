@@ -1,4 +1,4 @@
-﻿# Bibliothèque commune du banc de test local (coordinateur + workers de test + relais « remote-ffmpeg »).
+# Bibliothèque commune du banc de test local (coordinateur + workers de test + relais « remote-ffmpeg »).
 # Aucun accès au worker de production : chaque worker de test a son propre EMBY_WORKER_HOME sous work\workers\,
 # et seuls les processus démarrés ici (PID notés dans work\pids.txt) sont arrêtés.
 Set-StrictMode -Version Latest
@@ -453,7 +453,9 @@ function Initialize-Bench([string[]]$workers = @('w1', 'w2'), [switch]$Start) {
     New-Item -ItemType Directory -Force (Split-Path $Paths.ShimNoSecret) | Out-Null
     Copy-Item $Paths.Shim $Paths.ShimNoSecret -Force
     Write-ShimConfig $Paths.ShimNoSecret (Join-Path $Paths.Work 'absent\shim.secret')
-    if ($Start) { foreach ($w in $workers) { Start-Worker $w | Out-Null } ; foreach ($w in $workers) { Wait-WorkerState $w 'Available' 120 | Out-Null } }
+    # First start of freshly paired workers: they detect their encoders and GPU decoders (several minutes when the
+    # PC's GPU is busy with real work), hence a longer wait than for a restart.
+    if ($Start) { foreach ($w in $workers) { Start-Worker $w | Out-Null } ; foreach ($w in $workers) { Wait-WorkerState $w 'Available' 420 | Out-Null } }
 }
 
 function Start-Worker([string]$name, [switch]$Tray) {

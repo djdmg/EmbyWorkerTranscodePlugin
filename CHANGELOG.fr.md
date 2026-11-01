@@ -6,6 +6,15 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.25 — 01/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.25).
+
+### Corrigé
+
+- **Plugin** — Un worker fermé ou mis à jour en pleine tranche (sa tâche se termine sans erreur de ffmpeg) n'est plus considéré en échec : la tranche reprend ailleurs depuis son dernier morceau et le worker reste accepté pour cette conversion. Les vrais échecs portent toujours les lignes d'erreur de ffmpeg et écartent encore le worker. Constaté le 01/11 : les deux workers ont été mis à jour pendant un épisode 4K HDR, tous deux ont été écartés, et la dernière des 30 tranches attendait indéfiniment (le serveur ne sait pas faire le HDR → SDR, et les workers connectés empêchaient le délai d'abandon de démarrer).
+- **Plugin** — Une conversion que le serveur ne sait pas encoder continue d'essayer de placer ses tranches sur les workers pendant 30 minutes (`EncodeNoWorkerMinutes`, 10 auparavant) avant d'être rendue à Emby, y compris quand des workers sont connectés mais qu'aucun ne peut prendre la tranche. Les workers écartés après un vrai échec sont réessayés au bout de 5 minutes (`EncodeSetAsideRetryMinutes`) quand eux seuls pourraient faire le travail.
+
 ## Plugin 0.7.24 — 01/11/2026
 
 ### Ajouté

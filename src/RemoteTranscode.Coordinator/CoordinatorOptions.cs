@@ -67,10 +67,18 @@ public sealed class CoordinatorOptions
     public int EncodeLocalDelaySeconds { get; set; } = 20;
 
     /// <summary>
-    /// A conversion the server cannot encode itself (it lacks a filter the workers use) waits this long without any
-    /// capable worker connected before it is given back to Emby, which then converts it with its own command.
+    /// A conversion the server cannot encode itself (it lacks a filter the workers use) keeps trying to place its
+    /// waiting slices on the workers this long (set-aside workers retried, see EncodeSetAsideRetryMinutes) while
+    /// nothing runs, before it is given back to Emby, which then converts it with its own command on the server.
     /// </summary>
-    public int EncodeNoWorkerMinutes { get; set; } = 10;
+    public int EncodeNoWorkerMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// Workers set aside for a conversion after failing a slice are retried when, for this long, no other machine
+    /// could take its waiting slices although they are connected (seen after two workers were updated during one
+    /// conversion): within EncodeNoWorkerMinutes the conversion is rebalanced on the workers rather than given up.
+    /// </summary>
+    public int EncodeSetAsideRetryMinutes { get; set; } = 5;
 
     /// <summary>
     /// The server also encodes slices while workers work on the same conversion (one local ffmpeg at a time), except
