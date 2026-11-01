@@ -8,6 +8,12 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Unreleased
+
+### Fixed
+
+- **Plugin** — Failure reports no longer mask version numbers shaped like IPv4 addresses ("worker <ip>" for a worker 0.7.15.0, a GPU driver 11.1.45.729 shown as "<ip>"; issue #2): only four numbers up to 255, the first one not 0, are masked.
+
 ## Plugin 0.7.30 — 2026-11-01
 
 Built and published by GitHub Actions (release v0.7.30). Worker unchanged (0.7.17).

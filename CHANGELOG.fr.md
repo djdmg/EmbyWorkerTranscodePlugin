@@ -6,6 +6,12 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Non publié
+
+### Corrigé
+
+- **Plugin** — Les rapports d'échec ne masquent plus les numéros de version qui ont la forme d'une adresse IPv4 (« worker <ip> » pour un worker 0.7.15.0, un pilote GPU 11.1.45.729 affiché « <ip> » ; issue #2) : seuls quatre nombres jusqu'à 255, le premier différent de 0, sont masqués.
+
 ## Plugin 0.7.30 — 01/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.30). Worker inchangé (0.7.17).

@@ -116,6 +116,15 @@ public class FailureReporterTests : IDisposable
     }
 
     [Fact]
+    public void VersionsShapedLikeAddressesAreKeptRealAddressesAreNot()
+    {
+        // Issue #2: "worker <ip>" and "Meta Virtual Monitor (<ip>)" instead of the worker and driver versions.
+        string text = "worker 0.7.15.0, Meta Virtual Monitor (11.1.45.729) + NVIDIA GeForce RTX 4080 (32.0.16.1088)";
+        Assert.Equal(text, FailureReportFormatter.Sanitize(text, []));
+        Assert.Equal("from <ip> and <ip>", FailureReportFormatter.Sanitize("from 192.0.2.10 and 203.0.113.7:443", []));
+    }
+
+    [Fact]
     public void WorkerDescriptionNeverHasItsName()
     {
         string d = FailureReportFormatter.DescribeWorker("0.7.14", ["NVIDIA GeForce RTX 4080"], ["libx264", "h264_nvenc", "hevc_nvenc", "libx265"], "libx264");

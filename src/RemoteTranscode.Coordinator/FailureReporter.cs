@@ -164,6 +164,12 @@ public static class FailureReportFormatter
     /// (paths, file and folder names, titles, worker and host names), then any path, URL, address, e-mail, host name,
     /// id or media file name left. Not meant to be reversible: what is removed shows as &lt;path&gt;, &lt;ip&gt;...
     /// </summary>
+    private static bool IsAddress(string match)
+    {
+        var octets = match.Split(':')[0].Split('.');
+        return octets.Length == 4 && octets.All(o => int.TryParse(o, out int v) && v <= 255) && octets[0] != "0";
+    }
+
     public static string Sanitize(string? text, IEnumerable<string> sensitive)
     {
         if (string.IsNullOrEmpty(text))
@@ -179,7 +185,9 @@ public static class FailureReportFormatter
         s = UncPath.Replace(s, "<path>");
         s = UnixPath.Replace(s, "<path>");
         s = PathFragment.Replace(s, m => m.Value.Any(char.IsLetter) && m.Value != "N/A" ? "<path>" : m.Value);
-        s = IPv4.Replace(s, "<ip>");
+        // Only real addresses: four numbers up to 255, the first one not 0. A worker version (0.7.15.0) or a driver
+        // version (11.1.45.729) has the same shape and is no personal data (reports showed "worker <ip>").
+        s = IPv4.Replace(s, m => IsAddress(m.Value) ? "<ip>" : m.Value);
         s = IPv6.Replace(s, m => m.Value.Contains("::") || m.Value.Any(char.IsLetter) ? "<ip>" : m.Value);
         s = Guid32.Replace(s, "<id>");
         s = HostName.Replace(s, "<host>");
