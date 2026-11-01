@@ -410,6 +410,15 @@ Nothing is lost. The interrupted slice resumes from its last finished chunk (abo
 
 The server assembles the slices with Emby's own command (Emby's audio and subtitles), then checks the total duration and the video duration to the image. If the check fails, the file is rejected and Emby redoes the conversion itself. You never get a file with missing images without knowing it.
 
+### 7.6 Automatic failure reports (anonymous)
+
+When a conversion fails (file rejected by the final check, a worker failing a slice, conversion given back to Emby), the plugin reports it as an issue on the project's [GitHub repository](https://github.com/djdmg/EmbyWorkerTranscodePlugin/issues), so that the cause can be found and fixed. If the same problem is already reported (same signature), it adds a comment instead of a new issue.
+
+- **What is sent**: the plugin, Emby and worker versions; the server's system and architecture (e.g. « Linux x64, Emby 4.10.2 »); the workers involved described by their version and GPU model (e.g. « worker 0.7.14, NVIDIA GeForce RTX 4080 »); the exact error with every path removed; the source's technical characteristics (container, video codec and profile, bit depth, resolution, frame rate, duration, HDR, number and codecs of the audio tracks); the encoder and filter names Emby asked for; which type of machine encoded each slice; the assembly summary and the check line.
+- **What is never sent**: paths, file names, titles, domain names, IP addresses, host or PC names, worker names, user names, Emby ids. The source appears as an anonymous code (8 characters); the line linking that code to the file is written only in your own Emby log (« failure reported to GitHub (anonymous source code … = … ) »), so you can tell which episode is meant.
+- **Limits**: at most 5 reports a day, never twice for the same conversion. Normal situations are not reported (no capable worker connected, conversion cancelled in Emby, restart). Reports are sent in the background; a network problem is simply ignored and never affects a conversion.
+- **Turn it off**: untick « Signaler automatiquement les échecs de conversion sur GitHub (anonyme) » on the plugin page (section « Signalement des échecs »). The state is shown under the box: « actif », « désactivé », or « inactif : pas de jeton dans cette version » for a plugin you built yourself (only the releases published on GitHub can send reports).
+
 ---
 
 ## 8. Update, roll back and uninstall

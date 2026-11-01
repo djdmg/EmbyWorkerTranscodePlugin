@@ -118,7 +118,7 @@ public sealed class ConversionSession : IDisposable
                 return first.Code;
             if (first.Problem is null || first.QuitLate)
             {
-                await SendDoneAsync(new ConversionDone(taskId, first.Problem is null, first.Problem));
+                await SendDoneAsync(new ConversionDone(taskId, first.Problem is null, first.Problem, lastCheck));
                 return first.Code;
             }
             // The chunks are fine: the usual assembly converts the audio itself.
@@ -132,7 +132,7 @@ public sealed class ConversionSession : IDisposable
         var (code, problem, quit, quitLate) = await RunAssemblyAsync(assembly, plan, null);
         if (quit)
             return code;
-        await SendDoneAsync(new ConversionDone(taskId, problem is null, problem));
+        await SendDoneAsync(new ConversionDone(taskId, problem is null, problem, lastCheck));
         // A 'q' during verification still reaches the finished assembly run (it owns stdin until the next start).
         if (problem is null || quitRequested || quitLate)
             return code;
@@ -151,6 +151,7 @@ public sealed class ConversionSession : IDisposable
     private async Task<(int Code, string? Problem, bool Quit, bool QuitLate)> RunAssemblyAsync(string[] assembly, ConversionPlan plan, int? audioStreams)
     {
         var clock = Stopwatch.StartNew();
+        lastCheck = null;
         // Emby's 'q' now goes to the assembling ffmpeg, not to OnStdin: QuitReceived is the only trace of it.
         using var run = LocalFfmpeg.Start(config, assembly, StdinReader.Shared, 0, null);
         int code = await run.Completion;
@@ -178,7 +179,8 @@ public sealed class ConversionSession : IDisposable
                 {
                     var sourceVideo = await VideoSpanAsync(plan.Input, source.DurationSeconds);
                     var resultVideo = await VideoSpanAsync(plan.Output, result.DurationSeconds);
-                    err.Line($"remote-transcode: vidéo source {sourceVideo}, résultat {resultVideo}");
+                    lastCheck = $"vidéo source {sourceVideo}, résultat {resultVideo}";
+                    err.Line($"remote-transcode: {lastCheck}");
                     // An end that cannot be read is never taken as a pass: the file is not handed to Emby unchecked.
                     problem = !sourceVideo.IsKnown || !resultVideo.IsKnown
                         ? $"vérification impossible : fin de la vidéo illisible ({(sourceVideo.IsKnown ? "résultat" : "source")})"
@@ -230,6 +232,9 @@ public sealed class ConversionSession : IDisposable
     }
 
     private string? lastProbeError;
+
+    /// <summary>The check line of the last assembly (source and result video spans), sent with its verdict.</summary>
+    private string? lastCheck;
 
     private async Task<VideoSpan> VideoSpanAsync(string path, double duration, double window)
     {

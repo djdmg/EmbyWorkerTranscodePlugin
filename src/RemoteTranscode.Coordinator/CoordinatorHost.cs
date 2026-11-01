@@ -41,6 +41,7 @@ public static class CoordinatorHost
         builder.Services.AddSingleton(store);
         builder.Services.AddSingleton<Dispatcher>();
         builder.Services.AddSingleton<ServerMedia>();
+        builder.Services.AddSingleton(sp => new FailureReporter(options, sp.GetRequiredService<ILogger<FailureReporter>>()));
         builder.Services.AddSingleton<EncodeQueue>();
         builder.WebHost.ConfigureKestrel(k =>
         {

@@ -1,4 +1,4 @@
-define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-select', 'emby-scroller'], function (BaseView, loading) {
+define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-select', 'emby-checkbox', 'emby-scroller'], function (BaseView, loading) {
     'use strict';
 
     // Emby 4.10's web app loads modules as ES modules compiled to AMD: the value is under "default".
@@ -73,6 +73,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-select', 'emby
         view.querySelector('.btnOffloadOff').addEventListener('click', function () { self.setOffload(false); });
         view.querySelector('.btnPair').addEventListener('click', function () { self.pairWorker(); });
         view.querySelector('.btnSaveSettings').addEventListener('click', function () { self.saveSettings(); });
+        view.querySelector('.chkReportFailures').addEventListener('change', function (e) { self.setReportFailures(e.target.checked); });
 
 
         // One delegated handler for the buttons rendered in the tables.
@@ -148,6 +149,32 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-select', 'emby
             ? 'Coordinateur intégré à Emby : en service. '
             : '<span class="rt-error">Coordinateur intégré à Emby : arrêté' + (s.error ? ' (' + esc(s.error) + ')' : '') + '.</span> ') +
             "ffmpeg d'Emby détecté : " + esc(s.embyFfmpeg || '?') + ' — données : ' + esc(s.dataDir || '?');
+        this.refreshReport();
+    };
+
+    // ---- Automatic GitHub reports of failed conversions ----
+
+    View.prototype.refreshReport = function () {
+        var s = this.settings || {};
+        var box = this.view.querySelector('.chkReportFailures');
+        box.checked = s.reportFailures === 'true';
+        var state = s.reportFailuresState;
+        this.view.querySelector('.rt-report-state').innerHTML = state === 'active'
+            ? badge(StateLabels, 'On') + ' actif'
+            : state === 'notoken'
+                ? badge(StateLabels, 'Off') + " inactif : pas de jeton dans cette version (compilation locale ou fork), rien n'est envoyé"
+                : badge(StateLabels, 'Off') + ' désactivé';
+    };
+
+    View.prototype.setReportFailures = function (enable) {
+        var self = this;
+        post('ReportFailures', { Enabled: enable }).then(function (s) {
+            self.settings = s;
+            self.refreshReport();
+        }, function (err) {
+            self.refreshReport();
+            showError(err);
+        });
     };
 
     View.prototype.saveSettings = function () {

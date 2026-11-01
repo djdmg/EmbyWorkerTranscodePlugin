@@ -61,6 +61,10 @@ Garde-fous : auto-test du relais au démarrage d'Emby, coupe-circuit (fichier `d
    - Le journal du coordinateur note les morceaux assemblés (`assembled from chunks`).
 6. Encodage GPU possible (QVBR pour Intel QSV, `-cq` pour NVIDIA NVENC), désactivé par défaut. Un même épisode peut ainsi mêler des morceaux d'encodeurs différents (QSV, NVENC, x264) : leurs paramètres de décodage diffèrent, mais les changements ont lieu aux images clés, comme en streaming adaptatif ; décodage complet sans erreur et lecture vérifiée sur une télévision Samsung.
 
+### Signalement automatique des échecs
+
+Quand une conversion échoue (assemblage rejeté par le contrôle, worker en échec sur une tranche, conversion rendue à Emby), le plugin ouvre une issue sur ce dépôt, ou complète celle déjà ouverte avec la même signature, pour que le problème soit corrigé. Anonyme : versions du plugin, d'Emby et des workers, système et architecture du serveur, workers décrits par leur version et leur modèle de GPU seulement, message d'erreur sans aucun chemin, caractéristiques techniques de la source (conteneur, codecs, profil, profondeur de couleur, résolution, images/s, start_time, durée, HDR, pistes audio), profil de conversion (encodeur, noms des filtres d'Emby), type de machine qui a encodé chaque tranche, résumé `assembled from chunks` et ligne de contrôle. Jamais envoyé : chemin, nom de fichier, titre, domaine, adresse IP, nom d'hôte, de PC, de worker ou d'utilisateur, identifiant Emby. La source est désignée par un code anonyme, relié au fichier dans le seul journal d'Emby de ce serveur ; l'installation par les 8 premiers caractères d'un identifiant aléatoire. Au plus 5 envois par jour et par installation, jamais deux fois pour la même conversion ; envoi en arrière-plan, toute erreur réseau est ignorée. Rien n'est envoyé quand aucun worker capable n'était connecté, quand Emby annule ou lors d'un redémarrage. Désactivable sur la page du plugin (« Signaler automatiquement les échecs de conversion sur GitHub (anonyme) »). Seules les versions publiées par GitHub Actions contiennent le jeton d'envoi (jeton à portée limitée aux issues de ce dépôt) ; une compilation locale ou un fork n'envoie jamais rien.
+
 ### Worker
 
 - **Disponibilité** : manuelle ou automatique (PC inutilisé), plages horaires, batterie, charge laissée par les autres applications (CPU, GPU, mémoire) avec hystérésis ; « Libérer le PC » rend les tâches tout de suite, le drainage laisse finir les lectures en cours.
@@ -102,6 +106,8 @@ pwsh tools\package-worker.ps1              # -> artifacts\worker-package\EmbyRem
 pwsh tools\build-installer.ps1             # -> artifacts\installer\EmbyRemoteWorker-Setup-<version>.exe
 ```
 
+`build-plugin.ps1` n'inscrit le jeton du signalement automatique des échecs que s'il est fourni (`-IssueReportToken`, ou la variable d'environnement `ISSUE_REPORT_TOKEN` que GitHub Actions remplit depuis le secret du dépôt du même nom) ; sans lui, le plugin compilé ne signale jamais rien. Le jeton n'est jamais enregistré dans le dépôt.
+
 `package-worker.ps1` travaille dans `artifacts\worker-package` et refuse de produire un paquet dont l'exécutable n'a pas la version attendue (un worker qui tourne depuis le dossier de sortie garderait son ancien exécutable).
 
 Signature de code (possible, pas prévue) : `build-installer.ps1` accepte `-CertThumbprint <empreinte>` ou `-PfxPath <fichier.pfx>` et signe puis horodate le worker et l'installeur. Faute de certificat reconnu (choix fait pour un usage personnel), les livrables ne sont pas signés.
@@ -112,7 +118,7 @@ Les versions se règlent dans `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.Em
 
 | Élément | Version |
 |---|---|
-| Plugin | 0.7.23 |
+| Plugin | 0.7.24 |
 | Worker et installeur | 0.7.14, avec icône et décodage par le GPU (les workers 0.7.7 à 0.7.13 restent compatibles : 0.7.9 n'affiche le compteur de la file d'Emby que pendant une tâche, 0.7.7 et 0.7.8 ne l'affichent pas, 0.7.7 sans l'avancement des conversions) |
 | Emby Server testé | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 sans GPU) ; ffmpeg d'Emby 5.1 (fork) |
 | Client testé | Emby Web dans Chrome (lecteur hls.js 1.6.0-beta.2) |

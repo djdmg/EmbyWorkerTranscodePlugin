@@ -42,6 +42,13 @@
             </div>
 
             <div class="verticalSection">
+                <h2 class="sectionTitle">Signalement des échecs</h2>
+                <label class="checkboxContainer"><input is="emby-checkbox" type="checkbox" class="chkReportFailures" /><span>Signaler automatiquement les échecs de conversion sur GitHub (anonyme)</span></label>
+                <p class="rt-report-state rt-muted">…</p>
+                <p class="rt-muted">Quand une conversion échoue (assemblage rejeté par le contrôle, worker en échec sur une tranche, conversion rendue à Emby), le plugin ouvre ou complète une issue sur le <a is="emby-linkbutton" class="button-link" href="https://github.com/djdmg/EmbyWorkerTranscodePlugin/issues" target="_blank" rel="noopener">dépôt du projet</a> pour que l'erreur soit corrigée. Envoyé : les versions (plugin, Emby, système du serveur, workers décrits par leur GPU et leur version), le message d'erreur sans chemin, les caractéristiques techniques de la source (conteneur, codecs, résolution, images/s, durée, HDR, pistes audio) et le déroulé de la conversion. Jamais envoyé : chemin, nom de fichier, titre, adresse, nom de domaine, nom de PC, de worker ou d'utilisateur. La source est désignée par un code anonyme, relié au fichier dans le journal d'Emby de ce serveur seulement. Au plus 5 envois par jour.</p>
+            </div>
+
+            <div class="verticalSection">
                 <h2 class="sectionTitle">Workers</h2>
                 <div class="rt-workers"></div>
                 <div class="rt-row">

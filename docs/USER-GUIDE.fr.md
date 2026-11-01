@@ -410,6 +410,15 @@ Rien n'est perdu. La tranche interrompue reprend à son dernier morceau terminé
 
 Le serveur assemble les tranches avec la commande d'Emby (audio et sous-titres d'Emby), puis vérifie la durée totale et la durée de la vidéo à l'image près. Si la vérification échoue, le fichier est rejeté et Emby refait la conversion lui-même. Vous n'obtenez jamais, sans le savoir, un fichier auquel il manque des images.
 
+### 7.6 Signalement automatique des échecs (anonyme)
+
+Quand une conversion échoue (fichier rejeté par la vérification finale, worker en échec sur une tranche, conversion rendue à Emby), le plugin la signale par une issue sur le [dépôt GitHub](https://github.com/djdmg/EmbyWorkerTranscodePlugin/issues) du projet, pour que la cause soit trouvée et corrigée. Si le même problème est déjà signalé (même signature), il y ajoute un commentaire au lieu d'ouvrir une nouvelle issue.
+
+- **Ce qui est envoyé** : les versions du plugin, d'Emby et des workers ; le système et l'architecture du serveur (ex. « Linux x64, Emby 4.10.2 ») ; les workers concernés, décrits par leur version et leur modèle de GPU (ex. « worker 0.7.14, NVIDIA GeForce RTX 4080 ») ; l'erreur exacte, sans aucun chemin ; les caractéristiques techniques de la source (conteneur, codec et profil vidéo, profondeur de couleur, résolution, images/s, durée, HDR, nombre et codecs des pistes audio) ; l'encodeur et les noms des filtres demandés par Emby ; le type de machine qui a encodé chaque tranche ; le résumé de l'assemblage et la ligne de contrôle.
+- **Ce qui n'est jamais envoyé** : chemins, noms de fichiers, titres, noms de domaine, adresses IP, noms d'hôte ou de PC, noms des workers, noms d'utilisateur, identifiants Emby. La source apparaît sous un code anonyme (8 caractères) ; la ligne qui relie ce code au fichier n'est écrite que dans votre propre journal d'Emby (« failure reported to GitHub (anonymous source code … = … ) »), pour que vous sachiez de quel épisode il s'agit.
+- **Limites** : au plus 5 envois par jour, jamais deux fois pour la même conversion. Les situations normales ne sont pas signalées (aucun worker capable connecté, conversion annulée dans Emby, redémarrage). L'envoi se fait en arrière-plan ; un problème de réseau est simplement ignoré et ne gêne jamais une conversion.
+- **Désactiver** : décochez « Signaler automatiquement les échecs de conversion sur GitHub (anonyme) » sur la page du plugin (rubrique « Signalement des échecs »). L'état est affiché sous la case : « actif », « désactivé », ou « inactif : pas de jeton dans cette version » pour un plugin que vous avez compilé vous-même (seules les versions publiées sur GitHub peuvent envoyer).
+
 ---
 
 ## 8. Mise à jour, retour arrière et désinstallation

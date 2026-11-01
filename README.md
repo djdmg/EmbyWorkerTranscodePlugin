@@ -63,6 +63,10 @@ Safeguards: relay self-test at Emby startup, kill switch (`disabled` file), allo
    - The coordinator log records the assembled chunks (`assembled from chunks`).
 6. GPU encoding available (QVBR for Intel QSV, `-cq` for NVIDIA NVENC), disabled by default. A single episode can therefore mix chunks from different encoders (QSV, NVENC, x264): their decoding parameters differ, but the changes happen at keyframes, as in adaptive streaming; full decoding without errors and playback verified on a Samsung TV.
 
+### Automatic failure reports
+
+When a conversion fails (assembly rejected by the check, a worker failing a slice, conversion given back to Emby), the plugin opens an issue on this repository, or comments the open one with the same signature, so the problem can be fixed. Anonymous: plugin, Emby and worker versions, the server's OS and architecture, workers described by version and GPU model only, the error message with every path removed, the source's technical characteristics (container, codecs, profile, bit depth, resolution, frame rate, start time, duration, HDR, audio tracks), the conversion profile (encoder, Emby's filter names), which type of machine encoded each slice, the `assembled from chunks` summary and the check line. Never sent: path, file name, title, domain, IP address, host, PC, worker or user name, Emby id. The source is designated by an anonymous code, linked to the file only in this server's Emby log; the installation by the first 8 characters of a random id. At most 5 reports a day per installation, never twice for the same conversion; sent in the background, any network error is ignored. Not sent when no capable worker was connected, when Emby cancels or on a restart. Turn it off on the plugin page (« Signaler automatiquement les échecs de conversion sur GitHub (anonyme) »). Only the builds published by GitHub Actions carry the report token (a fine-grained token limited to this repository's issues); local builds and forks never send anything.
+
 ### Worker
 
 - **Availability**: manual or automatic (idle PC), time windows, battery, load left by other applications (CPU, GPU, memory) with hysteresis; « Libérer le PC » (Release the PC) hands jobs back immediately, draining lets running playbacks finish.
@@ -104,6 +108,8 @@ pwsh tools\package-worker.ps1              # -> artifacts\worker-package\EmbyRem
 pwsh tools\build-installer.ps1             # -> artifacts\installer\EmbyRemoteWorker-Setup-<version>.exe
 ```
 
+`build-plugin.ps1` embeds the token of the automatic failure reports only when one is given (`-IssueReportToken`, or the `ISSUE_REPORT_TOKEN` environment variable that GitHub Actions sets from the repository secret of the same name); without it the built plugin never reports. The token is never stored in the repository.
+
 `package-worker.ps1` works in `artifacts\worker-package` and refuses to produce a package whose executable does not have the expected version (a worker running from the output folder would keep its old executable).
 
 Code signing (possible, not planned): `build-installer.ps1` accepts `-CertThumbprint <thumbprint>` or `-PfxPath <file.pfx>` and signs then timestamps the worker and the installer. Lacking a trusted certificate (a deliberate choice for personal use), the deliverables are not signed.
@@ -114,7 +120,7 @@ Versions are set in `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.EmbyPlugin.c
 
 | Item | Version |
 |---|---|
-| Plugin | 0.7.23 |
+| Plugin | 0.7.24 |
 | Worker and installer | 0.7.14, with icon and GPU decoding (workers 0.7.7 to 0.7.13 remain compatible: 0.7.9 only shows the Emby queue counter during a job, 0.7.7 and 0.7.8 do not show it, 0.7.7 lacks conversion progress) |
 | Emby Server tested | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 without GPU); Emby's ffmpeg 5.1 (fork) |
 | Client tested | Emby Web in Chrome (hls.js player 1.6.0-beta.2) |

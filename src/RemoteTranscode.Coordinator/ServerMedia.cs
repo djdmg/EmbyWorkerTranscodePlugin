@@ -41,6 +41,51 @@ public sealed class ServerMedia(CoordinatorOptions options)
         return new SourceInfo(duration, width, height, transfer, audio, subs);
     }
 
+    /// <summary>
+    /// Technical description of a source for a failure report (container, video codec and format, audio codecs);
+    /// nothing else from the file (no tags: they hold titles). Throws when ffprobe fails.
+    /// </summary>
+    public async Task<SourceDescription> DescribeAsync(string path, CancellationToken token)
+    {
+        var (code, output, error) = await RunAsync(options.ServerFfprobe,
+            ["-v", "error", "-print_format", "json",
+             "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,profile,pix_fmt,bits_per_raw_sample,width,height,avg_frame_rate,r_frame_rate,start_time,color_transfer,color_primaries:stream_disposition=attached_pic",
+             path], token);
+        if (code != 0)
+            throw new InvalidOperationException($"ffprobe a échoué : {Tail(error)}");
+        using var doc = JsonDocument.Parse(output);
+        var root = doc.RootElement;
+        static string? Text(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        static int Int(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0;
+        static double? Number(string? s) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) ? d : null;
+        var format = root.TryGetProperty("format", out var f) ? f : default;
+        string? container = format.ValueKind == JsonValueKind.Object ? Text(format, "format_name") : null;
+        double duration = format.ValueKind == JsonValueKind.Object ? Number(Text(format, "duration")) ?? 0 : 0;
+        JsonElement? video = null;
+        var audio = new List<string>();
+        var list = root.TryGetProperty("streams", out var streams) && streams.ValueKind == JsonValueKind.Array ? streams.EnumerateArray().ToList() : [];
+        foreach (var s in list)
+        {
+            string? type = Text(s, "codec_type");
+            bool cover = s.TryGetProperty("disposition", out var d) && d.TryGetProperty("attached_pic", out var ap) && ap.GetInt32() == 1;
+            if (type == "video" && video is null && !cover)
+                video = s.Clone();
+            else if (type == "audio")
+                audio.Add(Text(s, "codec_name") ?? "?");
+        }
+        if (video is not { } v)
+            return new SourceDescription(container, null, null, null, null, 0, 0, null, null, duration, null, null, audio);
+        string? pixFmt = Text(v, "pix_fmt");
+        int? bits = int.TryParse(Text(v, "bits_per_raw_sample"), out int b) ? b
+            : pixFmt is null ? null
+            : System.Text.RegularExpressions.Regex.Match(pixFmt, @"p(\d+)(?:le|be)$") is { Success: true } m ? int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) : 8;
+        string? rate = Text(v, "avg_frame_rate") is { } avg && avg != "0/0" ? avg : Text(v, "r_frame_rate");
+        if (rate?.Split('/') is [var num, var den] && Number(num) is { } n && Number(den) is { } dd && dd > 0)
+            rate = $"{(n / dd).ToString("0.###", CultureInfo.InvariantCulture)} ({rate})";
+        return new SourceDescription(container, Text(v, "codec_name"), Text(v, "profile"), pixFmt, bits, Int(v, "width"), Int(v, "height"),
+            rate, Number(Text(v, "start_time")), duration, Text(v, "color_transfer"), Text(v, "color_primaries"), audio);
+    }
+
     /// <summary>A stream as ffprobe lists it: its type and the disposition flags set on it.</summary>
     public sealed record StreamEntry(int Index, string Type, string Codec, IReadOnlyList<string> Dispositions);
 

@@ -73,6 +73,10 @@ public sealed class EncodeSlice
     [JsonIgnore]
     public bool IsRunning => Worker != null;
 
+    /// <summary>The type of machine whose run completed this slice (never its name), for the failure reports.</summary>
+    [JsonIgnore]
+    public string? DoneBy { get; set; }
+
     [JsonIgnore]
     public int FirstChunk => Index * EmbyConversionPlanner.ChunksPerSlice;
 }
@@ -139,6 +143,14 @@ public sealed class EncodeTask
 
     [JsonIgnore]
     public DateTimeOffset? WaitingSince { get; set; }
+
+    /// <summary>Types of the machines that ran slices of this conversion (never their names), for the failure reports.</summary>
+    [JsonIgnore]
+    public List<string> MachineKinds { get; } = [];
+
+    /// <summary>The "assembled from chunks" summary of the last hand-over to the shim, for the failure reports.</summary>
+    [JsonIgnore]
+    public string? AssemblySummary { get; set; }
 
     [JsonIgnore]
     public bool IsActive => Status is EncodeStatus.Pending or EncodeStatus.Running or EncodeStatus.Assembling;
@@ -337,6 +349,7 @@ public sealed class EncodeQueue : IJobOwner
     private readonly Dispatcher dispatcher;
     private readonly ServerMedia media;
     private readonly ILogger<EncodeQueue> logger;
+    private readonly FailureReporter reporter;
     // Guards the task list, every task's Status, slices and chunks, and the encodes.json file.
     private readonly object gate = new();
     private readonly List<EncodeTask> tasks;
@@ -370,9 +383,10 @@ public sealed class EncodeQueue : IJobOwner
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
 
-    public EncodeQueue(CoordinatorOptions options, Dispatcher dispatcher, ServerMedia media, ILogger<EncodeQueue> logger)
+    public EncodeQueue(CoordinatorOptions options, Dispatcher dispatcher, ServerMedia media, ILogger<EncodeQueue> logger, FailureReporter reporter)
     {
         this.options = options;
+        this.reporter = reporter;
         this.dispatcher = dispatcher;
         this.media = media;
         this.logger = logger;
@@ -612,9 +626,10 @@ public sealed class EncodeQueue : IJobOwner
     /// <summary>The shim finished assembling (and verifying) Emby's output; the chunks are no longer needed.</summary>
     public void OnConversionDone(ConversionDone done)
     {
+        EncodeTask? task;
         lock (gate)
         {
-            var task = tasks.FirstOrDefault(t => t.Id == done.TaskId);
+            task = tasks.FirstOrDefault(t => t.Id == done.TaskId);
             if (task is null)
                 return;
             task.Status = done.Success ? EncodeStatus.Completed : EncodeStatus.Failed;
@@ -629,6 +644,9 @@ public sealed class EncodeQueue : IJobOwner
             else
                 KeepFailedSpool(task);
         }
+        // "q reçu": Emby cancelled during the assembly, nothing failed.
+        if (!done.Success && done.Error != "q reçu")
+            ReportFailure(task, FailureKind.AssemblyRejected, done.Error ?? "assemblage rejeté", check: done.Check);
     }
 
     // ---- Scheduling ---------------------------------------------------------------------------------
@@ -707,7 +725,7 @@ public sealed class EncodeQueue : IJobOwner
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // Source moved or deleted: fail this task only, the rest of the pass goes on.
-                await GiveUpAsync(task, $"source inaccessible : {ex.Message}");
+                await GiveUpAsync(task, $"source inaccessible : {ex.Message}", report: false);
                 continue;
             }
             // Waiting slices in order, each to a free worker, until no worker takes one.
@@ -870,6 +888,9 @@ public sealed class EncodeQueue : IJobOwner
             task.WaitingSince = null;
             if (!task.Participants.Contains(job.Worker.Identity.Name))
                 task.Participants.Add(job.Worker.Identity.Name);
+            string kind = MachineKind(task, job.Worker);
+            if (!task.MachineKinds.Contains(kind))
+                task.MachineKinds.Add(kind);
             Touch(task, startSeconds <= slice.Start
                 ? $"tranche {slice.Index + 1}/{task.Slices.Count} sur {job.Worker.Identity.Name}"
                 : $"tranche {slice.Index + 1}/{task.Slices.Count} reprise à {startSeconds:0}s sur {job.Worker.Identity.Name}");
@@ -1067,6 +1088,8 @@ public sealed class EncodeQueue : IJobOwner
                 summary.Append(CultureInfo.InvariantCulture, $" {slice.Index + 1}:{durations.Count}@{task.EncodedEnd(slice):0.000}/{durations.Sum(d => d.Duration):0.000}");
             }
         }
+        lock (gate)
+            task.AssemblySummary = summary.ToString();
         logger.LogInformation("Conversion {Id} assembled from chunks (slice:count@end/listed length):{Summary}", task.Id, summary);
         logger.LogInformation("Conversion {Id}: {Audio}", task.Id, audioFile != null
             ? $"audio converted ahead used ({audioFile}, itsoffset {audioOffset})"
@@ -1083,8 +1106,12 @@ public sealed class EncodeQueue : IJobOwner
         }
     }
 
-    /// <summary>Gives the conversion back to Emby: the shim then runs Emby's original command on the server.</summary>
-    private async Task GiveUpAsync(EncodeTask task, string error)
+    /// <summary>
+    /// Gives the conversion back to Emby: the shim then runs Emby's original command on the server. Reported to GitHub
+    /// (<see cref="ReportFailure"/>) unless <paramref name="report"/> is false: the normal cases without any error
+    /// (no capable worker connected for EncodeNoWorkerMinutes, source removed meanwhile).
+    /// </summary>
+    private async Task GiveUpAsync(EncodeTask task, string error, bool report = true)
     {
         List<Job> jobs;
         lock (gate)
@@ -1100,6 +1127,8 @@ public sealed class EncodeQueue : IJobOwner
         foreach (var job in jobs)
             await dispatcher.StopJobAsync(job, "conversion given back to Emby");
         logger.LogWarning("Conversion {Id} given back to Emby: {Error}", task.Id, error);
+        if (report)
+            ReportFailure(task, FailureKind.GivenBack, error);
         try
         {
             if (task.Shim is { IsOpen: true } shim)
@@ -1135,7 +1164,7 @@ public sealed class EncodeQueue : IJobOwner
             // EncodeNoWorkerMinutes is the conversion given back to Emby, which redoes it with its own command.
             if (!alongside && !dispatcher.HasWorkerFor(plan.Requirements!) && task.WaitingSince is { } since
                 && DateTimeOffset.UtcNow - since >= TimeSpan.FromMinutes(options.EncodeNoWorkerMinutes))
-                await GiveUpAsync(task, "plus aucun worker capable connecté, et le serveur ne peut pas encoder ces morceaux");
+                await GiveUpAsync(task, "plus aucun worker capable connecté, et le serveur ne peut pas encoder ces morceaux", report: false);
             return;
         }
 
@@ -1182,6 +1211,8 @@ public sealed class EncodeQueue : IJobOwner
             task.RefreshStatus();
             if (!task.Participants.Contains(LocalWorkerName))
                 task.Participants.Add(LocalWorkerName);
+            if (!task.MachineKinds.Contains(ServerKind))
+                task.MachineKinds.Add(ServerKind);
             Touch(task, alongside
                 ? $"tranche {slice.Index + 1}/{task.Slices.Count} encodée sur le serveur en parallèle des workers, à partir de {startSeconds:0}s"
                 : $"aucun worker : tranche {slice.Index + 1}/{task.Slices.Count} encodée sur le serveur à partir de {startSeconds:0}s");
@@ -1322,6 +1353,7 @@ public sealed class EncodeQueue : IJobOwner
                 {
                     task.AlignRunEnd(slice);
                     slice.Done = true;
+                    slice.DoneBy = ServerKind;
                     Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} terminée sur le serveur");
                 }
                 else if (++task.Attempts >= options.EncodeMaxAttempts)
@@ -1813,6 +1845,7 @@ public sealed class EncodeQueue : IJobOwner
     public async Task OnEndedAsync(Job job, JobEnded ended)
     {
         string? giveUp = null;
+        string? failure = null;
         EncodeTask? task;
         lock (gate)
         {
@@ -1826,10 +1859,12 @@ public sealed class EncodeQueue : IJobOwner
             {
                 task.AlignRunEnd(slice);
                 slice.Done = true;
+                slice.DoneBy = MachineKind(task, job.Worker);
                 Touch(task, $"tranche {slice.Index + 1}/{task.Slices.Count} encodée par {job.Worker.Identity.Name}");
             }
             else
             {
+                failure = ended.Error ?? $"fin prématurée (code {ended.ExitCode}, tranche incomplète)";
                 // A failing worker is set aside for this conversion; only the server's own failures give it back to
                 // Emby (OnLocalEndedAsync). The slice waits for another worker, or the server after the usual delay.
                 if (!task.FailedWorkers.Contains(job.Worker.Identity.Id))
@@ -1842,6 +1877,8 @@ public sealed class EncodeQueue : IJobOwner
             }
             task.RefreshStatus();
         }
+        if (failure != null)
+            ReportFailure(task, FailureKind.WorkerFailed, failure, job.Worker);
         if (giveUp != null)
             await GiveUpAsync(task, giveUp);
         Wake();
@@ -1882,6 +1919,138 @@ public sealed class EncodeQueue : IJobOwner
                 return (t, s);
         }
         return (null, null);
+    }
+
+    // ---- Automatic failure reports --------------------------------------------------------------------
+
+    /// <summary>The server as the failure reports name it (type only).</summary>
+    private string ServerKind => $"server ({options.ServerDescription})";
+
+    /// <summary>A worker as the failure reports name it: its version, GPUs and suitable encoders, never its name.</summary>
+    private static string MachineKind(EncodeTask task, WorkerConnection worker) =>
+        FailureReportFormatter.DescribeWorker(worker.Hello?.Version, worker.Hello?.Capabilities.Gpus, worker.Hello?.Capabilities.VideoEncoders,
+            task.Requirements.VideoEncoder);
+
+    /// <summary>
+    /// Reports a failed conversion to GitHub (<see cref="FailureReporter"/>), in the background: the source is analysed,
+    /// the report built and sent without ever delaying or affecting the conversion. Writes to the local log the line
+    /// that links the report's anonymous source code to the file, so the administrator can find the episode. Call
+    /// outside the lock.
+    /// </summary>
+    private void ReportFailure(EncodeTask task, FailureKind kind, string error, WorkerConnection? failedWorker = null, string? check = null)
+    {
+        try
+        {
+            if (!reporter.TryClaim(task.Id))
+                return;
+            List<string?> slices;
+            List<string> machines;
+            string? summary;
+            lock (gate)
+            {
+                slices = task.Slices.OrderBy(s => s.Index).Select(s => s.Done ? s.DoneBy ?? "?" : null).ToList();
+                machines = [.. task.MachineKinds];
+                summary = task.AssemblySummary;
+            }
+            string? failed = failedWorker is null ? null : MachineKind(task, failedWorker);
+            if (failed != null && !machines.Contains(failed))
+                machines.Add(failed);
+            // ffmpeg's last lines, as the worker sent them ("ffmpeg failed: line | line | ...").
+            const string FfmpegFailed = "ffmpeg failed: ";
+            List<string> tail = kind == FailureKind.WorkerFailed && error.StartsWith(FfmpegFailed, StringComparison.Ordinal)
+                ? error[FfmpegFailed.Length..].Split(" | ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList()
+                : [];
+            var sensitive = SensitiveStrings(task);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    SourceDescription? source = null;
+                    long size = 0;
+                    try
+                    {
+                        size = new FileInfo(task.Input).Length;
+                        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                        source = await media.DescribeAsync(task.Input, limit.Token);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug("Conversion {Id}: source not analysed for the failure report ({Error})", task.Id, ex.Message);
+                    }
+                    double duration = source?.DurationSeconds ?? task.Source?.DurationSeconds ?? 0;
+                    string code = FailureReportFormatter.SourceCode(size, duration, reporter.InstallId);
+                    // Local log only: the published report carries the code, never the file.
+                    logger.LogInformation("Conversion {Id}: failure reported to GitHub (anonymous source code {Code} = {Input})", task.Id, code, task.Input);
+                    await reporter.SendAsync(new FailureReport
+                    {
+                        Kind = kind,
+                        Error = error,
+                        WorkerErrorTail = tail,
+                        FailedWorker = failed,
+                        PluginVersion = FailureReporter.Version,
+                        Server = options.ServerDescription,
+                        Installation = reporter.InstallId[..8],
+                        SourceCode = code,
+                        Source = source,
+                        RequestedEncoder = task.Requirements.VideoEncoder,
+                        Filters = task.Requirements.Filters,
+                        SliceMachines = slices,
+                        Machines = machines,
+                        AssemblySummary = summary,
+                        Check = check,
+                        Sensitive = sensitive,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug("Conversion {Id}: failure report not sent ({Error})", task.Id, ex.Message);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug("Conversion {Id}: failure report not prepared ({Error})", task.Id, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// What this installation must never publish, removed from every text of a report before anything else: the
+    /// conversion's paths, file names and title, the folders above them (series, season), the names of the workers
+    /// (paired and announced), the server's host names and addresses, and the coordinator's own folders.
+    /// </summary>
+    private List<string> SensitiveStrings(EncodeTask task)
+    {
+        var list = new List<string> { task.Input, task.Output, options.DataDir, spool };
+        foreach (string path in new[] { task.Input, task.Output })
+        {
+            list.Add(Path.GetFileName(path));
+            list.Add(Path.GetFileNameWithoutExtension(path));
+            string? dir = Path.GetDirectoryName(path);
+            list.Add(dir ?? "");
+            // The two folders above the file (series and season, or the film's folder).
+            for (int i = 0; i < 2 && !string.IsNullOrEmpty(dir); i++)
+            {
+                list.Add(Path.GetFileName(dir));
+                dir = Path.GetDirectoryName(dir);
+            }
+        }
+        try
+        {
+            list.AddRange(dispatcher.Store?.Load().Select(w => w.Name) ?? []);
+        }
+        catch (Exception) { }
+        list.AddRange(dispatcher.Workers.Select(w => w.Identity.Name));
+        list.AddRange(dispatcher.Workers.Select(w => w.Hello?.Name ?? ""));
+        try
+        {
+            list.Add(System.Net.Dns.GetHostName());
+        }
+        catch (Exception) { }
+        if (options.PublicUrl is { } pub && Uri.TryCreate(pub, UriKind.Absolute, out var uri))
+            list.Add(uri.Host);
+        // The administrator's advertised host and the server's addresses (put in the certificate).
+        list.AddRange(options.CertificateNames.Where(n => n != "localhost"));
+        return list.Where(v => !string.IsNullOrWhiteSpace(v)).Distinct().ToList();
     }
 
     private void Touch(EncodeTask task, string note)

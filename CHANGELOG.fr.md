@@ -6,6 +6,15 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.24 — 01/11/2026
+
+### Ajouté
+
+- **Plugin** — Signalement automatique et anonyme des échecs : quand une conversion échoue (assemblage rejeté par le contrôle, worker en échec sur une tranche et écarté, conversion rendue à Emby), le plugin ouvre une issue sur le dépôt GitHub du projet avec les labels `auto-report` et `bug`, ou commente celle déjà ouverte avec la même signature (événement + erreur normalisée + codec vidéo). Le rapport contient ce qu'il faut pour corriger — versions (plugin, Emby, système/architecture du serveur, workers par version et modèle de GPU), l'erreur sans aucun chemin, les dernières lignes d'erreur de ffmpeg du worker, les caractéristiques techniques de la source (conteneur, codec, profil, profondeur de couleur, résolution, images/s, start_time vidéo, durée, HDR, pistes audio), l'encodeur et les noms des filtres demandés par Emby, le type de machine de chaque tranche, le résumé `assembled from chunks` et la ligne de contrôle — et rien de personnel : ni chemin, nom de fichier, titre, domaine, adresse IP, nom d'hôte, de PC, de worker ou d'utilisateur, ni identifiant Emby. La source est désignée par un code anonyme, relié au fichier dans le seul journal local d'Emby ; l'installation par un identifiant aléatoire tronqué. Au plus 5 envois par jour et par installation, jamais deux fois pour la même conversion, envoi en arrière-plan avec un délai court (erreurs ignorées). Non signalé : aucun worker capable connecté, annulation par Emby, redémarrage, source supprimée entre-temps.
+- **Plugin** — Page du plugin : « Signaler automatiquement les échecs de conversion sur GitHub (anonyme) » (activé par défaut) avec son état (« actif », « désactivé », « inactif : pas de jeton dans cette version »).
+- **Compilation** — Le jeton GitHub n'est jamais dans le dépôt : GitHub Actions passe le secret `ISSUE_REPORT_TOKEN` à `tools/build-plugin.ps1`, qui l'inscrit dans les métadonnées de la DLL. Une compilation locale ou un fork n'a pas de jeton et ne signale jamais rien.
+- **Plugin** — Le verdict du relais sur un assemblage transmet maintenant sa ligne de contrôle (étendue vidéo de la source et du résultat), pour les rapports.
+
 ## Plugin 0.7.23 et worker 0.7.14 — 01/11/2026
 
 Construits et publiés par GitHub Actions (release v0.7.23).

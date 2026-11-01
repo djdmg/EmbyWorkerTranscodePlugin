@@ -8,6 +8,15 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.24 — 2026-11-01
+
+### Added
+
+- **Plugin** — Automatic, anonymous failure reports: when a conversion fails (assembly rejected by the check, a worker failing a slice and set aside, conversion given back to Emby), the plugin opens an issue on the project's GitHub repository with the labels `auto-report` and `bug`, or comments the open one with the same signature (event + normalised error + video codec). The report carries what is needed to fix the problem — versions (plugin, Emby, server OS/architecture, workers by version and GPU model), the error without any path, the worker's last ffmpeg error lines, the source's technical characteristics (container, codec, profile, bit depth, resolution, frame rate, video start time, duration, HDR, audio tracks), the encoder and filter names Emby asked for, the type of machine of each slice, the `assembled from chunks` summary and the check line — and nothing personal: no path, file name, title, domain, IP address, host, PC, worker or user name, Emby id. The source is designated by an anonymous code, linked to the file only in the local Emby log; the installation by a truncated random id. At most 5 reports a day per installation, never twice for the same conversion, sent in the background with a short timeout (errors ignored). Not reported: no capable worker connected, cancellation by Emby, restart, source removed meanwhile.
+- **Plugin** — Plugin page: « Signaler automatiquement les échecs de conversion sur GitHub (anonyme) » (on by default) with its state (« actif », « désactivé », « inactif : pas de jeton dans cette version »).
+- **Build** — The GitHub token is never in the repository: GitHub Actions passes the `ISSUE_REPORT_TOKEN` secret to `tools/build-plugin.ps1`, which embeds it in the DLL's metadata. Local builds and forks have no token and never report.
+- **Plugin** — The shim's verdict on an assembly now carries its check line (source and result video spans), for the reports.
+
 ## Plugin 0.7.23 and worker 0.7.14 — 2026-11-01
 
 Built and published by GitHub Actions (release v0.7.23).

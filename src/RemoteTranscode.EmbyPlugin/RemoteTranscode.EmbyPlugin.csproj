@@ -9,7 +9,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>RemoteTranscode.EmbyPlugin</AssemblyName>
     <RootNamespace>RemoteTranscode.EmbyPlugin</RootNamespace>
-    <Version>0.7.23</Version>
+    <Version>0.7.24</Version>
     <!-- Emby serves plugin pages under a URL that only changes with Emby's own version, so browsers keep old copies:
          the plugin version is part of the page names (see Plugin.PageSuffix). -->
     <!-- Letters and digits of the full version (0.6.3 -> 063, 0.7.0-beta.1 -> 070beta1): valid in a page name. -->
@@ -47,6 +47,14 @@
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>PageSuffix</_Parameter1>
       <_Parameter2>$(PageSuffix)</_Parameter2>
+    </AssemblyAttribute>
+    <!-- GitHub token for the automatic failure reports (FailureReporter), given by the build only
+         (tools/build-plugin.ps1, from the ISSUE_REPORT_TOKEN secret in GitHub Actions): never in the repository.
+         Without it (local builds, forks) the reports are inactive. Anyone can read it from the published DLL, so it
+         must be a fine-grained token limited to this repository with the Issues permission only. -->
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute" Condition="'$(IssueReportToken)' != ''">
+      <_Parameter1>IssueReportToken</_Parameter1>
+      <_Parameter2>$(IssueReportToken)</_Parameter2>
     </AssemblyAttribute>
     <EmbeddedResource Include="Web\remotetranscode.js" LogicalName="RemoteTranscode.EmbyPlugin.Web.remotetranscode.js" />
     <EmbeddedResource Include="$(ShimPackages)\*.gz" LogicalName="RemoteTranscode.EmbyPlugin.Shim.%(Filename)%(Extension)" />

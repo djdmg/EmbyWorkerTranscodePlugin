@@ -155,7 +155,7 @@ public sealed class InterceptionEntryPoint : IServerEntryPoint
         IServerApplicationHost host)
     {
         var logger = logManager.GetLogger("RemoteTranscode");
-        runtime = new Runtime(paths, ffmpeg, library, logger, new SyncQueue(host, logger));
+        runtime = new Runtime(paths, ffmpeg, library, logger, new SyncQueue(host, logger), host.ApplicationVersion);
         Interception.Register(new Interception(configuration, ffmpeg, logger, runtime.DataDir));
         Runtime.Instance = runtime;
     }

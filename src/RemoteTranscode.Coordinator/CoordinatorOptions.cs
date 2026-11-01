@@ -107,6 +107,26 @@ public sealed class CoordinatorOptions
     [System.Text.Json.Serialization.JsonIgnore]
     public Func<int?>? ConversionQueueRemaining { get; set; }
 
+    // ---- Automatic failure reports (see FailureReporter) ----
+
+    /// <summary>
+    /// Report failed conversions as anonymous GitHub issues on the project's repository. On by default; it does
+    /// anything only when the build embedded a token (<see cref="IssueReportToken"/>).
+    /// </summary>
+    public bool IssueReporting { get; set; } = true;
+
+    /// <summary>
+    /// GitHub token used for the reports, taken from the plugin's build (never from a file or the repository); null:
+    /// no report is ever sent. Never serialized, logged or shown.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? IssueReportToken { get; set; }
+
+    /// <summary>The server as a report describes it: "Linux x64, Emby 4.10.2" (set by the Emby plugin).</summary>
+    public string ServerDescription { get; set; } =
+        $"{(OperatingSystem.IsWindows() ? "Windows" : OperatingSystem.IsLinux() ? "Linux" : OperatingSystem.IsMacOS() ? "macOS" : "other OS")} " +
+        $"{System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()}, standalone coordinator";
+
     public string ServerFfprobe { get; set; } = "/var/packages/EmbyServer/target/bin/ffprobe";
     public string ServerFfmpeg { get; set; } = "/var/packages/EmbyServer/target/bin/ffmpeg";
 

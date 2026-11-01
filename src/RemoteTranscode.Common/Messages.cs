@@ -183,8 +183,11 @@ public sealed record ConversionReady(string TaskId, string ListFile, string? Aud
 /// <summary>The remote encode gave up: the shim runs Emby's original command on the server.</summary>
 public sealed record ConversionFailed(string TaskId, string Reason) : Message;
 
-/// <summary>The shim reports the outcome of the assembly so the coordinator can clean up.</summary>
-public sealed record ConversionDone(string TaskId, bool Success, string? Error) : Message;
+/// <summary>
+/// The shim reports the outcome of the assembly so the coordinator can clean up. <paramref name="Check"/>: the check
+/// line (source and result video spans), when the check got that far; used by the failure reports.
+/// </summary>
+public sealed record ConversionDone(string TaskId, bool Success, string? Error, string? Check = null) : Message;
 
 public static class MessageJson
 {

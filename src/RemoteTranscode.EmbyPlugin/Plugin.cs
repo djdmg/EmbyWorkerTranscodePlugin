@@ -94,4 +94,10 @@ public sealed class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Loopback port of the relay and administration endpoint (never exposed).</summary>
     public int ShimPort { get; set; } = 8098;
+
+    /// <summary>
+    /// Failed conversions are reported as anonymous issues on the project's GitHub repository (see FailureReporter).
+    /// On by default; does nothing in a build without a report token.
+    /// </summary>
+    public bool ReportFailures { get; set; } = true;
 }

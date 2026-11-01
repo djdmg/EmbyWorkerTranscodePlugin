@@ -44,8 +44,13 @@ jobs:
       - name: Unit tests
         run: dotnet test src/RemoteTranscode.Tests -c Release --nologo
 
+      # ISSUE_REPORT_TOKEN: fine-grained token limited to this repository, Issues read/write only, embedded in the
+      # plugin for its anonymous failure reports (see FailureReporter). Empty for forks and pull requests from forks:
+      # the reports are then inactive in that build.
       - name: Build the plugin
         shell: pwsh
+        env:
+          ISSUE_REPORT_TOKEN: ${{ secrets.ISSUE_REPORT_TOKEN }}
         run: ./tools/build-plugin.ps1
 
       - name: Package the worker

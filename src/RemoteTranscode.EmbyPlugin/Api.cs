@@ -54,6 +54,13 @@ public sealed class SetEnabled : IReturnVoid
     public bool Enabled { get; set; }
 }
 
+[Route("/RemoteTranscode/ReportFailures", "POST", Summary = "Switches the anonymous GitHub reports of failed conversions on or off")]
+[Authenticated(Roles = "Admin")]
+public sealed class SetReportFailures : IReturnVoid
+{
+    public bool Enabled { get; set; }
+}
+
 /// <summary>
 /// Admin-only relay to the coordinator's loopback API. Emby performs the authentication (administrators only);
 /// the coordinator only accepts loopback calls carrying the plugin secret.
@@ -91,6 +98,16 @@ public sealed class RemoteTranscodeApi : IService, IRequiresRequest
         // Applied, then saved only if Emby accepted it, under the runtime's start gate (see SetEnabledAsync).
         string? problem = await runtime.SetEnabledAsync(request.Enabled).ConfigureAwait(false);
         return problem != null ? Error(HttpStatusCode.Conflict, problem) : SettingsResult();
+    }
+
+    /// <summary>Applied to the running coordinator at once, no restart (see Runtime.SetReportFailures).</summary>
+    public object Post(SetReportFailures request)
+    {
+        var runtime = Runtime.Instance;
+        if (Plugin.Instance is null || runtime is null)
+            return Error(HttpStatusCode.ServiceUnavailable, "plugin non initialisé");
+        runtime.SetReportFailures(request.Enabled);
+        return SettingsResult();
     }
 
     public async Task<object> Post(SaveSettings request)
@@ -163,6 +180,9 @@ public sealed class RemoteTranscodeApi : IService, IRequiresRequest
             ("enabled", Config.Enabled ? "true" : "false"),
             ("active", dispatcher != null && interception?.IsActive(dispatcher) == true ? "true" : "false"),
             ("encoderPath", interception?.CurrentEncoderPath),
+            // Whether this build has a report token, never the token itself.
+            ("reportFailures", Config.ReportFailures ? "true" : "false"),
+            ("reportFailuresState", !Runtime.HasIssueReportToken ? "notoken" : Config.ReportFailures ? "active" : "disabled"),
         }), "application/json");
     }
 

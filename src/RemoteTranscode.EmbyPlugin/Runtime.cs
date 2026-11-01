@@ -43,10 +43,13 @@ public sealed class Runtime : IDisposable
     private CoordinatorOptions? options;
     private Timer? refresh;
     private volatile bool started;
+    private readonly Version? embyVersion;
 
-    public Runtime(IServerApplicationPaths paths, IFfmpegManager ffmpeg, ILibraryManager library, EmbyLogger logger, SyncQueue syncQueue)
+    public Runtime(IServerApplicationPaths paths, IFfmpegManager ffmpeg, ILibraryManager library, EmbyLogger logger, SyncQueue syncQueue,
+        Version? embyVersion = null)
     {
         this.syncQueue = syncQueue;
+        this.embyVersion = embyVersion;
         this.paths = paths;
         this.ffmpeg = ffmpeg;
         this.library = library;
@@ -291,9 +294,48 @@ public sealed class Runtime : IDisposable
             ServerEnvironment = FfmpegEnvironment,
             CertificateNames = CertificateNames(),
             ConversionQueueRemaining = syncQueue.Remaining,
+            IssueReporting = config.ReportFailures,
+            IssueReportToken = IssueReportToken,
+            ServerDescription = ServerDescription(),
         };
         (o.AllowedRoots, o.OutputRoots) = Roots();
         return o;
+    }
+
+    // ---- Automatic failure reports ------------------------------------------------------------------
+
+    /// <summary>
+    /// GitHub token embedded at build time (see FailureReporter): null in local builds and forks, which then never
+    /// report. Never logged, shown or returned by the API; only whether there is one is.
+    /// </summary>
+    private static readonly string? IssueReportToken = FailureReporter.EmbeddedToken(typeof(Runtime).Assembly);
+
+    /// <summary>Whether this build can report failures at all.</summary>
+    public static bool HasIssueReportToken => IssueReportToken != null;
+
+    /// <summary>The page's switch, applied to the running coordinator at once (no restart) and saved.</summary>
+    public void SetReportFailures(bool enabled)
+    {
+        var plugin = Plugin.Instance;
+        if (plugin is null)
+            return;
+        plugin.Configuration.ReportFailures = enabled;
+        plugin.SaveConfiguration();
+        if (options != null)
+            options.IssueReporting = enabled;
+    }
+
+    /// <summary>The server as a failure report describes it: "Linux x64, Emby 4.10.2" (no host name, no kernel string).</summary>
+    private string ServerDescription()
+    {
+        string os = OperatingSystem.IsWindows() ? "Windows" : OperatingSystem.IsLinux() ? "Linux" : OperatingSystem.IsMacOS() ? "macOS"
+            : OperatingSystem.IsFreeBSD() ? "FreeBSD" : "other OS";
+        if (os == "Linux" && RuntimeId().Contains("musl", StringComparison.Ordinal))
+            os = "Linux (musl)";
+        string arch = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
+        var v = embyVersion ?? typeof(IFfmpegManager).Assembly.GetName().Version;
+        string emby = v is null ? "?" : $"{v.Major}.{v.Minor}.{Math.Max(0, v.Build)}";
+        return $"{os} {arch}, Emby {emby}";
     }
 
     /// <summary>
