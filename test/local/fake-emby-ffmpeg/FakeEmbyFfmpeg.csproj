@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Faux « ffmpeg d'Emby » du banc local : retire les options propres au fork d'Emby, lance le ffmpeg amont et émet
+       les lignes stderr SegmentComplete= que seul le ffmpeg modifié d'Emby écrit. Projet autonome (aucune référence à src). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>fake-emby-ffmpeg</AssemblyName>
+    <RootNamespace>FakeEmbyFfmpeg</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+</Project>

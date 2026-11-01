@@ -1,0 +1,306 @@
+# Changelog
+
+Version française : [CHANGELOG.fr.md](CHANGELOG.fr.md)
+
+Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Most recent version at the top.
+
+The Emby plugin and the Windows worker have had separate version numbers since 0.7.7; each entry states the component concerned: **plugin** (Emby DLL, including the coordinator and the relay), **worker** (`EmbyRemoteWorker.exe`), **installer** (`EmbyRemoteWorker-Setup-<version>.exe`), **bench** (local test bench). Dates are the build or installation dates recorded in `REPRISE.txt` and the project documents; when a version cannot be dated or its exact content is not established, versions are grouped together.
+
+Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
+
+## Worker 0.7.13 — 2026-11-01
+
+### Fixed
+
+- **Installer** — An update (or an uninstall) also closes the bundled `ffmpeg.exe` / `ffprobe.exe` still running from the installation folder after the worker has closed: a run outliving its worker kept `ffmpeg.exe` locked and the update stopped. Only programs started from that folder, in the user's own session, are closed.
+
+## Plugin 0.7.21 — 2026-11-01
+
+Installed on the test server on 2026-11-01 at 12:32.
+
+### Added
+
+- **Plugin** — The plugin page shows the conversion in progress in a box above the history: episode, progress bar, percentage, speed, time left, slices done, and which machines work on which slice.
+- **Plugin** — A conversion whose assembly is rejected by the check keeps its chunks, its concat list and a chunk table (`chunks.csv`: slice, slice bounds, chunk, start, end) in its spool folder, and the log says where: only the latest one is kept. Until now everything was deleted, which left a wrong length (e.g. +12 frames on an AV1 episode encoded by a worker and the server) impossible to analyse.
+
+### Fixed
+
+- **Plugin** — A conversion could end as « annulée » (cancelled) although its file was assembled and verified: during the assembly the relay does not read its connection for minutes, the connection may drop, and the coordinator took that for Emby stopping the conversion before the relay's verdict arrived on a new connection. While assembling, a closed connection now waits up to 2 minutes for the verdict.
+
+### Known issues
+
+- An AV1 episode (Mr. Robot S03E09) encoded by a worker and the server together came out 12 to 14 frames too long and went back to Emby; under investigation.
+
+## Plugin 0.7.20 and worker 0.7.12 — 2026-11-01
+
+Plugin installed on the test server on 2026-11-01 at 12:08.
+
+### Added
+
+- **Worker** — Video decoding on the GPU when encoding happens there: NVDEC (`-hwaccel cuda`) with NVENC, D3D11VA with QSV (Intel) or AMF (AMD), validated at worker startup for each codec; frames brought back to system memory for Emby's filters. Automatic fallback to software decoding if the GPU cannot read the stream (and immediate relaunch without GPU if ffmpeg fails before the first chunk). Checkbox « Décodage vidéo par le GPU quand l'encodage s'y fait » (GPU video decoding when encoding on the GPU) in the settings (enabled by default). Measured on PC-A (Intel): decoded frames identical to software decoding, segment identical to the byte; 4K HDR → SDR 0.37x → 0.40x with 25 % less CPU, 4K → 1080p 0.80x → 0.91x (−38 %). The bottleneck of HDR conversions remains the HDR → SDR conversion (`zscale` + `tonemap`) on the CPU.
+- **Worker** — Icon (version 0.7.11, never installed, included here).
+
+### Fixed
+
+- **Plugin** — Conversions encoded by the server: assembled video 3 to 4 frames too short, hence rejected and redone by Emby. Emby's ffmpeg, with `-start_at_zero`, lists chunk times offset from the start of the source video (5 ms on Ted Lasso S03E09, 7 ms on Mr. Robot S03E04); each slice lost this offset in the durations of the assembly list (26 slices × 5 ms = 3 frames). A finished slice, whose end is known to the frame, now has its times realigned on that end; a gap of more than half a frame is not corrected (it would mean missing frames, which the check must see). Observed on 2026-11-01: all conversions done by the NAS alone (Ted Lasso, Mr. Robot) were handed back to Emby.
+- **Plugin** — The server encoding alone no longer waits 20 s between two slices when no capable worker is connected (about 20 % of time lost).
+
+### Bench
+
+- T19: conversion done entirely by the server, over several slices.
+
+## Plugin 0.7.19 — 2026-10-31
+
+Installed on the test server on 2026-10-31 at 22:18 (full bench PASS, 12 verdicts; proof of sync of audio converted ahead of time: 0 differing audio packets, identical MD5s). Observed right away: Narcos S02E02 (4K HDR) split into 34 slices and handed to PC-B.
+
+### Fixed
+
+- **Plugin** — A conversion is no longer handed back to Emby because the workers have not reconnected yet: if at least one worker is paired (even if disconnected at the moment), it is accepted and waits for a capable worker for up to `EncodeNoWorkerMinutes` (10 min). Observed on 2026-10-31 at 21:36: Emby relaunched Narcos S02E02 8 s after its restart, before the workers came back; since the server could not do the HDR → SDR translation alone (no `zscale`), the whole episode went back to the NAS at 0.36x.
+- **Plugin** — Duplicated frame at a slice boundary: when the server handed over to a worker right at the end of its slice, the worker relaunched the slice for a few milliseconds and encoded the first frame of the next slice (video one frame, 42 ms, behind the sound for the rest of the episode; the frame-exact check, with a tolerance of 1.5 frames, let it through). A slice whose chunks already reach the end is now marked finished. Defect predating 0.7.18, found on the bench (T16b).
+
+## Plugin 0.7.18 and worker 0.7.11 — 2026-10-31
+
+Plugin installed on the test server on 2026-10-31 at 21:36.
+
+### Added
+
+- **Worker, installer** — Worker icon (green disc, "play" triangle in slices) for the executable (Explorer, taskbar, shortcuts, installed apps), the window, the notification area (same drawing, colour depending on state) and the installer (file and banner at the top of its windows). Drawn by `tools\make-worker-icon.py`.
+- **Plugin** — Audio conversion during video encoding (`EncodeAudioAhead`), to shorten assembly (~3 min 30 per episode on the NAS): present but **disabled by default**, pending validation of audio/video sync.
+
+### Changed
+
+- **Plugin** — The workers / server choice is no longer fixed at the start of a conversion. A conversion is accepted as soon as a capable worker is connected **or** the server can encode its slices; the server then starts alone and, at each scheduler pass (every 10 s), pending slices are offered to workers again: a PC switched on mid-episode joins in immediately. Observed on 2026-10-30/31: with PC-B switched off at night, all conversions started without a worker were left entirely to the NAS (« aucun worker connecté capable de cette conversion », no connected worker capable of this conversion), even after the PC came back. Only case handed back to Emby: the server cannot encode the slices and no capable worker connects within `EncodeNoWorkerMinutes` (10 min).
+- **Plugin** — HDR → SDR conversions (Emby requests its `supertonemap` filter, absent from standard FFmpeg): the server now applies to the slices it encodes **the same translation as the workers** (`zscale` + `tonemap`), so that all slices of a movie have the same rendering; if it lacks these filters, it leaves these slices to the workers. Previously it kept `supertonemap`: rendering could differ from one slice to another when the server encoded in parallel with the workers.
+
+### Fixed
+
+- **Plugin** — An unreadable slice boundary no longer puts the whole episode into a single slice: it is skipped and its two neighbouring slices are merged into one; the single slice only remains if most boundaries are unreadable. Observed on Narcos S02E02 (4K HDR, frame at 3831.5 s unreadable, 64 min in a single slice on PC-B at 0.6x).
+
+### Bench
+
+- T17: conversion started with no worker connected, accepted and started by the server, then a worker started along the way takes slices. T18: Emby graph with `supertonemap` encoded by the server (the bench's standard FFmpeg) thanks to the translation, alone and then with a worker.
+
+## Plugin 0.7.17 and worker 0.7.10 — 2026-10-30
+
+Plugin installed on the test server on 2026-10-30 at 17:27 (counter observed: 150 items); worker 0.7.10 installed on PC-A at 16:36.
+
+### Added
+
+- **Plugin** — The plugin page also shows Emby's conversion queue (Conversions section).
+
+### Changed
+
+- **Plugin, worker** — The number of items in Emby's conversion queue is sent to **all connected workers every 30 s**, whether they have a job or not. Previously it only arrived with the progress of a slice encoded by the worker: an unavailable worker (CPU busy with other applications) showed "—". Workers 0.7.8 and 0.7.9 ignore these messages.
+
+### Known issues
+
+- The plugin page does not open in the Emby Android app (« veuillez vous connecter directement à votre serveur local », please connect directly to your local server): the apps do not run the JavaScript of third-party plugins. It works in a browser, including on mobile. An app-compatible page would require Emby's declarative interface (IHasUIPages).
+
+## Plugin 0.7.16 — 2026-10-30
+
+Installed on the test server on 2026-10-30 at 16:17.
+
+### Fixed
+
+- **Plugin** — Emby conversion queue counter: 0.7.15 looked for the sync manager in Emby's container, where Emby 4.10 does not register it ("SyncManager is not registered" in the log, counter "—" on the workers). The DLL now takes the instance Emby itself uses (`SyncManager.Current`); if it does not exist yet (Emby still starting), it asks again later instead of giving up.
+
+## Plugin 0.7.15 and worker 0.7.9 — 2026-10-30
+
+Plugin installed on the test server on 2026-10-30 at 16:03; worker 0.7.9 installed on PC-A at 15:57; installer dropped into a shared folder for PC-C. Observed on the real server (Grey's Anatomy S05E13): each of PC-A's slices starts 4 to 7 s before the end of the previous one, and the server encodes its own slices (3, 7…) at the same time.
+
+### Added
+
+- **Plugin, worker** — The worker window shows the **number of items remaining in Emby's conversion queue** (pending or in progress, all conversion jobs combined). The DLL reads it inside Emby itself (sync manager, at most every 30 s), without an API key or external program; if an Emby version no longer allows it, the counter shows "—". Requires worker 0.7.9; workers 0.7.7 and 0.7.8 ignore this information.
+
+### Changed
+
+- **Plugin** — The server also encodes slices **in parallel with the workers** (`EncodeLocalAlongsideWorkers`, enabled by default): only one ffmpeg at a time on the server, never a slice reserved for a worker (already prefetched), and not an end-of-conversion slice that a busy worker would clearly finish first (the server's speed is now measured like the workers'). The server only passes its slice to a free worker once nothing is left pending. Previously it only encoded if no worker was working on the conversion.
+- **Plugin** — **Next slice started early** (`EncodeOverlapSeconds`, 6 s): a few seconds before the end of its slice (based on its measured speed), the worker receives its next slice and launches it immediately; it then briefly counts two jobs. The ffmpeg startup (opening the source, seeking, encoder initialization: about 4 s out of 26 s per slice with QSV, measured on PC-A) no longer leaves the encoder idle. Works with all workers that accept 2 simultaneous jobs, whatever their version.
+
+### Bench
+
+- Test T15: a single worker; the server encodes a slice in parallel and the worker has two simultaneous slices; frame-exact check passed. T14, T09a and T09b PASS; 134 unit tests OK.
+
+## Plugin 0.7.14 and worker 0.7.8 — 2026-10-30
+
+Plugin installed on the test server on 2026-10-30 at 12:49; worker 0.7.8 installed on PC-A at 12:55; installer dropped into a shared folder for PC-C.
+
+### Added
+
+- **Worker** — The job list shows the progress of each conversion: columns « Fichier » (File, episode title), « Tranche » (Slice, "7/24"), « Position » (start and end of the slice within the episode), « Tranche % » (Slice %), « Total » (progress of the whole episode, all machines combined, with the estimated time remaining), « Vitesse » (Speed) and « Durée » (Duration), with tooltips.
+- **Plugin** — The job offer carries the slice (title, number, count, start, end), and the coordinator sends the overall conversion progress (`ConversionProgress`) to the workers taking part. This message is only sent to workers 0.7.8 or later: a 0.7.7 worker keeps working, without the new columns.
+
+### Bench
+
+- T01, T02, T09a, T09b and T14 PASS; 134 unit tests OK.
+
+## Plugin 0.7.13 — 2026-10-30
+
+Installed on the test server on 2026-10-30 at 10:57.
+
+### Fixed
+
+- **Plugin** — A worker that fails on a slice is excluded from **that conversion only**; the slice is taken over by another worker, or by the server if none is left. Only failures of the server itself hand the conversion back to Emby (after 3 attempts). Previously, 3 failures of the same worker were enough to hand the whole conversion back to Emby, which redid it alone on the NAS: observed on 2026-10-30 on Grey's Anatomy S07E19, when PC-C was shut down during an NVENC encode (GPU unavailable during Windows shutdown, "Invalid argument" on 3 slices).
+
+### Bench
+
+- Test T14: a worker's ffmpeg is stopped mid-slice; the worker is excluded from the conversion, which finishes on the other worker, without being handed back to Emby.
+
+## Plugin 0.7.12 — 2026-10-30
+
+### Fixed
+
+- **Plugin** — AVI files without presentation timestamps on their packets (DivX/Xvid with packed B-frames): they are no longer split into slices, because runs that seek into them do not meet on the same frame. They are converted as a single slice. Observed on Monk S07E06: 22 slices gave 34 extra frames; as one slice, the result is identical to Emby's conversion (57,072 frames).
+- **Plugin** — Frame-exact check: decoding takes into account packets without presentation timestamps (decoding timestamp instead). For these sources, whose last frame has no timestamp, the end is only known to within two frames: tolerance of 3 frames instead of 1.5.
+- **Plugin** — Frame-exact check: an unreadable end of video is no longer taken for a success. The measurement is repeated on the last 10 minutes; if it fails again, the file is rejected and Emby redoes the conversion. ffprobe errors are written to the log.
+- **Plugin** — A conversion is accepted as soon as a capable worker is connected, even if it is momentarily busy. The server encodes slices in the meantime (after 20 s) and hands over to the worker as soon as it becomes free. Previously, the whole conversion stayed on the NAS (observed on a HEVC episode while PC-A was loaded). With no capable worker connected at all, nothing changes: Emby converts by itself.
+
+### Bench
+
+- Test T04 adapted: a worker that is connected but unavailable no longer refuses the conversion; the server starts it in slices.
+
+## Plugin 0.7.11 — 2026-10-29
+
+Installed on the test server on 2026-10-29 at 16:37.
+
+### Changed
+
+- **Plugin** — Installation on Synology without SSH: generic DSM task "Installer plugin RemoteTranscode" (root, disabled) that stitches `plugin.part0`..`plugin.part5` back together, verifies the hash in `plugin.sha256` and runs `install-plugin.sh`; log `install-<date>.log`. A new version no longer requires changing the task (operations tool, no change in the DLL).
+
+### Fixed
+
+- **Plugin** — Conversion assembly: the `concat.txt` list gives the exact duration of each chunk (`duration` directive, taken from the worker's segment list).
+- **Plugin** — Without this duration, Emby's ffmpeg 5.1 sometimes estimated an MPEG-TS chunk one frame too short; the next chunk overlapped and the video ended frames too early. Observed on a 4K episode of 104 chunks: 10 missing frames (0.42 s), file rejected by the frame-exact check.
+- **Validated** on the real server on 2026-10-29: the same episode (104 chunks, encoded by PC-A then by the NAS) is assembled without any "Non-monotonous DTS" warning; video of 2837.879 s for 2837.876 s in the source, accepted by the check.
+
+## Plugin 0.7.10 — 2026-10-29
+
+Installed on the test server on 2026-10-29 at 12:05, without SSH.
+
+### Added
+
+- **Plugin** — Conversions: check of the video duration of the assembled file to within 1.5 frames; otherwise the file is rejected and the conversion redone by Emby.
+- **Plugin** — Assembly log (`assembled from chunks`).
+- **Bench** — Fake Emby ffmpeg (`test\local\fake-emby-ffmpeg`) and fast-start LF tests (`run-tests.ps1 -Only LF`, 11 passed).
+- **Bench** — Test T13: simulated sleep of a worker (processes frozen for 40 s), during playback and conversion.
+- **Bench** — Log capture in UTF-8.
+
+### Fixed
+
+- **Plugin** — Fast start: the coordinator's advice arrives within 1.2 s at most (ffprobe probe cached, continued in the background). Previously, advice taking more than 2 s left the whole playback on the server.
+- **Plugin** — Late advice (after 2 s): the relay reconnects and starts on the server.
+- **Plugin** — Delay of the 1st segment on the server: 3 s plus one segment at the minimum speed (5.5 s) instead of 4 s.
+- **Plugin** — Only a measured server speed is remembered (on segments, or read from ffmpeg's progress), for 7 days instead of 30, never 0.00x.
+- **Plugin** — A server that has produced no segment is stopped without waiting (before: 10 s wait).
+- **Plugin** — Prefetch: probe reused, no keyframe search from 0, no hint when a worker already has the playback.
+- **Plugin** — Conversions: no more final chunk shorter than 2 s (`-segment_time` lengthened). Origin: 3 missing frames at the end of a 0.7.4 conversion (last chunk of 0.12 s lost on the server side).
+
+## Worker and installer 0.7.7 — 2026-10-29
+
+### Added
+
+- **Worker** — Local source cache (`InputCache`): 4 MB blocks, at most 4 GB and a quarter of the free space, emptied at startup.
+- **Worker** — Uninstallation via `EmbyRemoteWorker.exe --uninstall` (`--quiet` for no window), limited to the files in the manifest.
+
+### Changed
+
+- **Worker** — All ffmpeg inputs go through the cache, which enables prefetching and avoids re-reading the header and index on each resume.
+
+## Plugin 0.7.7 – 0.7.9 — 2026-10-28 to 2026-10-29
+
+Versions built but not installed on the test server; 0.7.10 replaces them. Exact dates not established.
+
+### Added
+
+- **Plugin** — Playback starting on the server (0.7.7): first segment by Emby's ffmpeg, then hand-over to a worker at the exact segment after about 20 s ahead (`LocalFirstSeconds`), or as soon as the server proves too slow (below 1.2x).
+- **Plugin** — Decision on click: directly on a worker for HDR tone mapping, a source of more than 1088 lines, or a movie for which the server has already been measured too slow.
+- **Plugin** — Prefetch during the start on the server: the worker that will take over loads the header, the end of the file and the data up to beyond the hand-over point (3-minute authorization limited to that file).
+
+### Fixed
+
+- **Plugin** — D2 (0.7.9): the `EXTINF` duration of a segment is computed from the end of the previous segment, not from the `Start=0` of the first segment after a resume.
+
+## Worker and installer 0.7.5 – 0.7.6 — 2026-10-28
+
+Content specific to 0.7.6 not established.
+
+### Changed
+
+- **Installer** — No longer copies itself as `Uninstall.exe`; an `Uninstall.exe` left by an earlier version is deleted during the update.
+- **Installer** — Closes the worker cleanly ("-exit" event, like « Quitter » (Quit)) and only forces it to stop after 20 s or for a version that does not know this signal.
+
+### Fixed
+
+- **Installer** — Installer 0.7.4 had been flagged by Kaspersky ("PDM:Trojan.Win32.Generic", behavioural detection). Do not use 0.7.4.
+
+## Plugin and worker 0.7.1 – 0.7.4 — 2026-10-28
+
+Successive versions on the same day; the exact version of each change is not established by the sources.
+
+### Added
+
+- **Plugin** — Conversions in **slices** of about 2 minutes (then 60, 60, 30, 30 s at the end), boundaries placed on frames read by ffprobe, encoded in parallel by the workers; one slice per worker, the next one reserved.
+- **Plugin** — End of conversion based on the workers' measured speed; fallback to the server after 20 s without a free worker, then back to a worker.
+- **Plugin** — Playback has priority: a conversion is moved off a worker on which a playback is not progressing fast enough.
+- **Plugin** — A worker whose ffmpeg fails for a playback is excluded from it for 10 minutes.
+- **Worker** — Optional GPU encoding, separate for conversions and playback, disabled by default (QVBR for Intel QSV, `-cq` for NVIDIA NVENC). A fix of the main10 profile in GPU playback is recorded, with no established version.
+
+### Fixed
+
+- **Plugin** — 0.7.3: file whose video starts after the audio (6 s); each slice now stops on its boundary (21,579 frames out of 21,579).
+
+### Known issues
+
+- **Plugin** — 0.7.4: a GPU conversion lost its last 3 frames (fixed in 0.7.10).
+- **Installer** — 0.7.4: flagged by Kaspersky (fixed in 0.7.5).
+
+## Plugin and worker 0.7.0 — 2026-10-28
+
+### Added
+
+- **Plugin** — Relay self-test before activation; the administrator's custom ffmpeg is saved and later restored.
+- **Plugin** — Hardened allow-list of ffmpeg arguments and filters; secrets with 0600 permissions.
+- **Plugin** — Rate limiting of worker authentication attempts: 10 failures within 10 minutes block the address for 15 minutes (`X-Real-IP` read only behind the local proxy).
+- **Installer** — Manifest-based uninstallation (`install-manifest.txt`).
+- **Worker** — « Aide » (Help) → « À propos » (About) menu (version, FFmpeg, identifier), version in the title.
+
+### Changed
+
+- **Plugin, worker, installer** — Full code review (about 55 findings fixed), 111 unit tests.
+
+### Fixed
+
+- **Worker** — The segment upload loop no longer stops on an error (antivirus, network outage), which used to block playback.
+- **Plugin** — A worker stopping is no longer taken for the end of the video; no more "resurrected" jobs in the Running state.
+
+## Plugin 0.6 — 2026-10-27
+
+### Added
+
+- **Plugin** — Standalone plugin: the DLL alone is enough. The coordinator is hosted inside the Emby process.
+- **Plugin** — Embedded relay for linux-x64, linux-arm64, linux-musl-x64 and win-x64, extracted at startup, generated dispatcher.
+- **Plugin** — Everything is detected from Emby at each startup: ffmpeg, ffprobe, environment variables, transcoding folder, libraries.
+- **Plugin** — Uninstallation: back to Emby's ffmpeg on the fly, without a restart.
+
+## Plugin and installer 0.5.0 — 2026-10-27
+
+### Added
+
+- **Plugin** — First Emby plugin: dashboard page (switch, workers, jobs, conversions), administrator-only API, relayed to a separate coordinator.
+- **Plugin** — Interception of Emby's playbacks **and** conversions, with Emby's own settings (no more project-specific profiles). Remux left to Emby's ffmpeg.
+- **Plugin** — Translation of Emby's HDR `supertonemap` filter into zscale + tonemap for the workers.
+- **Plugin** — Hand-over at the exact segment: resume at the exact end of the last delivered segment, back to a worker when it becomes available again.
+- **Installer** — First all-in-one worker installer, without administrator rights.
+
+### Fixed
+
+- **Worker** — A segment truncated by a job being stopped is no longer delivered (it left a gap in the player's buffer).
+
+## Before 0.5.0 — prototype, 2026-10-26 to 2026-10-27
+
+No version number.
+
+- Interception of Emby 4.10 through the "custom ffmpeg path" setting and imitation of the `SegmentComplete` lines (2026-10-26).
+- Worker: manual or automatic availability, time windows, CPU/GPU/memory thresholds, notification area icon, standalone package with FFmpeg 9.0.2 (2026-10-27).
+- Multiple workers: score-based selection, resume on another worker at the next segment, worker's ffmpeg processes stopped with it (Job Object) (2026-10-27).
+- Background conversion queue in 30 s chunks with resume at the first missing chunk (2026-10-27).

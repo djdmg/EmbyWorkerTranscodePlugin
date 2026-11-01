@@ -1,0 +1,71 @@
+<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/remotetranscodejs" data-title="Transcodage distribué">
+    <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
+        <div class="rt-page">
+            <style>
+                .rt-page table { width: 100%; border-collapse: collapse; margin: .5em 0 1em; }
+                .rt-page th, .rt-page td { text-align: left; padding: .45em .6em; border-bottom: 1px solid rgba(128,128,128,.25); vertical-align: top; }
+                .rt-page th { font-weight: 500; opacity: .7; white-space: nowrap; }
+                .rt-page .rt-badge { display: inline-block; padding: .1em .55em; border-radius: 1em; font-size: .85em; color: #fff; white-space: nowrap; }
+                .rt-page .rt-muted { opacity: .65; font-size: .9em; }
+                .rt-page .rt-bar { height: .45em; background: rgba(128,128,128,.25); border-radius: .3em; min-width: 6em; }
+                .rt-page .rt-bar > div { height: 100%; background: #52b54b; border-radius: .3em; }
+                .rt-page .rt-row { display: flex; flex-wrap: wrap; gap: .8em; align-items: flex-end; }
+                .rt-page .rt-row > .inputContainer, .rt-page .rt-row > .selectContainer { margin: 0; flex: 1 1 14em; }
+                .rt-page .rt-code { width: 100%; font-family: monospace; font-size: .85em; word-break: break-all; padding: .6em; background: rgba(128,128,128,.15); border-radius: .3em; }
+                .rt-page .rt-error { color: #e85c5c; }
+                .rt-page .rt-current-box { padding: .8em 1em; margin: .5em 0 1em; border-radius: .4em; background: rgba(128,128,128,.12); }
+                .rt-page .rt-current-box .rt-bar { height: .7em; margin: .5em 0 .3em; }
+                .rt-page .rt-current-title { font-weight: 500; font-size: 1.1em; }
+            </style>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Transcodage distribué</h2>
+                <p class="rt-offload-state rt-muted">…</p>
+                <div class="rt-row">
+                    <button is="emby-button" type="button" class="raised button-submit btnOffloadOn"><span>Activer</span></button>
+                    <button is="emby-button" type="button" class="raised btnOffloadOff"><span>Désactiver</span></button>
+                </div>
+                <p class="rt-muted">Activé : le plugin capte les transcodages de lecture et les conversions qu'Emby lance, avec les réglages et profils d'Emby, et les confie aux workers disponibles ; sans worker, Emby les traite sur le serveur comme d'origine. Désactivé (ou plugin désinstallé) : Emby fonctionne exactement comme d'origine. Aucun redémarrage n'est nécessaire ; après une mise à jour d'Emby, le plugin se reconfigure seul au démarrage.</p>
+                <p class="rt-status-error rt-error"></p>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Connexion des workers</h2>
+                <p class="rt-service rt-muted">…</p>
+                <div class="rt-row">
+                    <div class="inputContainer"><input is="emby-input" type="text" class="txtWorkerUrl" label="Adresse d'écoute des workers" autocomplete="off" /></div>
+                    <div class="inputContainer"><input is="emby-input" type="text" class="txtPublicUrl" label="Adresse publique (reverse proxy, facultatif)" autocomplete="off" /></div>
+                    <div class="inputContainer"><input is="emby-input" type="text" class="txtAdvertisedHost" label="Adresse du serveur pour les workers (facultatif)" autocomplete="off" /></div>
+                    <button is="emby-button" type="button" class="raised btnSaveSettings"><span>Enregistrer</span></button>
+                </div>
+                <p class="rt-muted">Par défaut https://0.0.0.0:8097 : les workers se connectent directement en TLS (certificat généré par le plugin, vérifié par les workers). Derrière un reverse proxy HTTPS : écoute en http://127.0.0.1:8097 et adresse publique https://… du proxy. Avec Emby sous Docker, publiez ce port. Adresse du serveur pour les workers : nom d'hôte ou adresse IP par laquelle les PC joignent ce serveur, placée dans le code d'association en TLS direct (vide : adresse réseau local détectée ; à renseigner sous Docker ou si le code d'association contient une adresse injoignable). Les nouveaux réglages s'appliquent tout de suite ; associez à nouveau les workers si l'adresse publique change.</p>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Workers</h2>
+                <div class="rt-workers"></div>
+                <div class="rt-row">
+                    <div class="inputContainer"><input is="emby-input" type="text" class="txtWorkerName" label="Nom du nouveau worker" autocomplete="off" /></div>
+                    <button is="emby-button" type="button" class="raised btnPair"><span>Associer un worker</span></button>
+                </div>
+                <div class="rt-pairing" hidden>
+                    <p>Code d'association à coller dans le worker (Paramètres → Code d'association). Il contient un secret : ne le partagez pas, il n'est affiché qu'une fois.</p>
+                    <div class="rt-code"></div>
+                </div>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Tâches en cours</h2>
+                <div class="rt-jobs"></div>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Conversions</h2>
+                <p class="rt-muted">Les conversions se lancent depuis Emby (Convertir, téléchargements) avec ses profils de qualité. Ici : le suivi de celles confiées aux workers, avec leurs reprises.</p>
+                <div class="rt-current"></div>
+                <p class="rt-queue"></p>
+                <div class="rt-encodes"></div>
+            </div>
+        </div>
+    </div>
+</div>

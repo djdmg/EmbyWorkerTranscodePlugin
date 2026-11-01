@@ -1,0 +1,118 @@
+# Builds and tests on every push and pull request; a tag "v<plugin version>" (e.g. v0.7.21) also publishes a GitHub
+# Release with the plugin DLL, the worker setup and their SHA-256 files.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      EMBY_VERSION: 4.10.2.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # Emby's own assemblies (not redistributable), taken from Emby's official release package.
+      - name: Cache Emby assemblies
+        uses: actions/cache@v4
+        with:
+          path: research/emby-${{ env.EMBY_VERSION }}
+          key: emby-assemblies-${{ env.EMBY_VERSION }}
+      - name: Fetch Emby assemblies
+        shell: pwsh
+        run: ./tools/fetch-emby-assemblies.ps1 -EmbyVersion $env:EMBY_VERSION
+
+      # FFmpeg bundled with the worker (downloaded and checked by package-worker.ps1).
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/EmbyRemoteWorker-build
+          key: ffmpeg-${{ hashFiles('tools/package-worker.ps1') }}
+
+      - name: Unit tests
+        run: dotnet test src/RemoteTranscode.Tests -c Release --nologo
+
+      - name: Build the plugin
+        shell: pwsh
+        run: ./tools/build-plugin.ps1
+
+      - name: Package the worker
+        shell: pwsh
+        run: ./tools/package-worker.ps1
+
+      - name: Build the worker setup
+        shell: pwsh
+        run: ./tools/build-installer.ps1
+
+      - name: Collect release files
+        id: collect
+        shell: pwsh
+        run: |
+          $plugin = ([xml](Get-Content src/RemoteTranscode.EmbyPlugin/RemoteTranscode.EmbyPlugin.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          $worker = ([xml](Get-Content src/RemoteTranscode.Worker/RemoteTranscode.Worker.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item artifacts/plugin/RemoteTranscode.EmbyPlugin.dll dist/
+          Copy-Item "artifacts/installer/EmbyRemoteWorker-Setup-$worker.exe" dist/
+          foreach ($f in Get-ChildItem dist -File) {
+            "$((Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($f.Name)" | Set-Content -NoNewline "$($f.FullName).sha256"
+          }
+          "plugin=$plugin" >> $env:GITHUB_OUTPUT
+          "worker=$worker" >> $env:GITHUB_OUTPUT
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: emby-distributed-transcoding-${{ steps.collect.outputs.plugin }}
+          path: dist/
+
+    outputs:
+      plugin: ${{ steps.collect.outputs.plugin }}
+      worker: ${{ steps.collect.outputs.worker }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: emby-distributed-transcoding-${{ needs.build.outputs.plugin }}
+          path: dist
+
+      - name: Check the tag against the plugin version
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "v${{ needs.build.outputs.plugin }}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match the plugin version ${{ needs.build.outputs.plugin }}"; exit 1
+          fi
+
+      # Release notes: CHANGELOG.md from its newest section down to the one of this plugin version, included (a worker
+      # release published since the previous plugin comes first).
+      - name: Release notes
+        run: >
+          awk -v v="Plugin ${{ needs.build.outputs.plugin }}"
+          '/^## /{ if (done) exit; n++; if (index($0, v)) done = 1 } n >= 1' CHANGELOG.md > notes.md;
+          test -s notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${GITHUB_REF_NAME}" dist/*
+          --title "Plugin ${{ needs.build.outputs.plugin }} / Worker ${{ needs.build.outputs.worker }}"
+          --notes-file notes.md

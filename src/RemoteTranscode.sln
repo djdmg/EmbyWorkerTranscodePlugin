@@ -1,0 +1,52 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RemoteTranscode.Common", "RemoteTranscode.Common\RemoteTranscode.Common.csproj", "{3863C868-C625-43AA-9FF2-03C2C716A7C8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RemoteTranscode.Coordinator", "RemoteTranscode.Coordinator\RemoteTranscode.Coordinator.csproj", "{8D0A6497-7BB9-4C47-AD13-8928BEFDC63B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RemoteTranscode.Shim", "RemoteTranscode.Shim\RemoteTranscode.Shim.csproj", "{39F6B345-0A4F-435A-AFD0-0E177B9C4B59}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RemoteTranscode.Worker", "RemoteTranscode.Worker\RemoteTranscode.Worker.csproj", "{6B67D339-794C-48CF-9BA1-44ECC2A044E1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RemoteTranscode.Tests", "RemoteTranscode.Tests\RemoteTranscode.Tests.csproj", "{2394B3E4-7AA9-4B8B-87AB-C341728C0E4D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RemoteTranscode.Installer", "RemoteTranscode.Installer\RemoteTranscode.Installer.csproj", "{66DEE6CF-F4BD-4075-91EF-4B9207278606}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3863C868-C625-43AA-9FF2-03C2C716A7C8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3863C868-C625-43AA-9FF2-03C2C716A7C8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3863C868-C625-43AA-9FF2-03C2C716A7C8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3863C868-C625-43AA-9FF2-03C2C716A7C8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8D0A6497-7BB9-4C47-AD13-8928BEFDC63B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8D0A6497-7BB9-4C47-AD13-8928BEFDC63B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8D0A6497-7BB9-4C47-AD13-8928BEFDC63B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8D0A6497-7BB9-4C47-AD13-8928BEFDC63B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{39F6B345-0A4F-435A-AFD0-0E177B9C4B59}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{39F6B345-0A4F-435A-AFD0-0E177B9C4B59}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{39F6B345-0A4F-435A-AFD0-0E177B9C4B59}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{39F6B345-0A4F-435A-AFD0-0E177B9C4B59}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6B67D339-794C-48CF-9BA1-44ECC2A044E1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6B67D339-794C-48CF-9BA1-44ECC2A044E1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6B67D339-794C-48CF-9BA1-44ECC2A044E1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6B67D339-794C-48CF-9BA1-44ECC2A044E1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2394B3E4-7AA9-4B8B-87AB-C341728C0E4D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2394B3E4-7AA9-4B8B-87AB-C341728C0E4D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2394B3E4-7AA9-4B8B-87AB-C341728C0E4D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2394B3E4-7AA9-4B8B-87AB-C341728C0E4D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{66DEE6CF-F4BD-4075-91EF-4B9207278606}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{66DEE6CF-F4BD-4075-91EF-4B9207278606}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{66DEE6CF-F4BD-4075-91EF-4B9207278606}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{66DEE6CF-F4BD-4075-91EF-4B9207278606}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

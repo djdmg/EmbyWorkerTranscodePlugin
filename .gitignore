@@ -1,0 +1,42 @@
+# Build output
+bin/
+obj/
+artifacts/
+*.user
+*.suo
+.vs/
+
+# Emby's own assemblies used to compile the plugin (proprietary, not redistributable):
+# copy them from an Emby Server installation, see README.md.
+research/
+
+# Local tools and working folders
+.tools/
+backup/
+wip/
+final/
+deploy/
+
+# Personal working notes (French)
+REPRISE.txt
+resume.txt
+
+# Test bench output (generated media, logs, results)
+test/local/work/
+
+# PDF documentation build output and scratch files
+docs/pdf/chrome-profile/
+docs/pdf/doc.html
+docs/pdf/doc.pdf
+docs/pdf/build.log
+docs/pdf/update-*.py
+
+# Worker icon preview
+src/RemoteTranscode.Worker/Assets/*-preview.png
+
+# PDF documentation sources (French, not yet translated)
+docs/pdf/
+
+# Old manual test outputs
+test/out/
+test/*.mp4

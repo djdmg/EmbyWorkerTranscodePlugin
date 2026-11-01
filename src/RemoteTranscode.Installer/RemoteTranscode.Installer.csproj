@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Per-user setup for Emby Remote Worker. The application payload (zip of the published app folder) is not stored in
+    the source tree: tools\build-installer.ps1 stages it and passes its path with -p:PayloadZip=<zip>.
+    Without PayloadZip the project still builds (solution build), but the resulting setup reports a missing payload.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <AssemblyName>EmbyRemoteWorker-Setup</AssemblyName>
+    <ApplicationIcon>..\RemoteTranscode.Worker\Assets\worker.ico</ApplicationIcon>
+    <RootNamespace>RemoteTranscode.Installer</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- asInvoker: without an explicit level Windows' installer detection would force UAC on a "*Setup*.exe". -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version Condition="'$(Version)' == ''">0.7.0</Version>
+    <Product>Emby Remote Worker</Product>
+    <Company>Emby Remote Transcode</Company>
+    <Description>Installation de Emby Remote Worker</Description>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(PayloadZip)' != ''">
+    <EmbeddedResource Include="$(PayloadZip)" LogicalName="payload.zip" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Logo of the setup windows (Banner.cs). -->
+    <EmbeddedResource Include="..\RemoteTranscode.Worker\Assets\worker.ico" LogicalName="worker.ico" Visible="false" />
+  </ItemGroup>
+
+  <Target Name="CheckPayload" BeforeTargets="BeforeBuild" Condition="'$(PayloadZip)' != ''">
+    <Error Condition="!Exists('$(PayloadZip)')" Text="PayloadZip introuvable : $(PayloadZip)" />
+  </Target>
+
+</Project>

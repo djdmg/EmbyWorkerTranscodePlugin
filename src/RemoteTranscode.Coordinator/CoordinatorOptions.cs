@@ -1,0 +1,128 @@
+using RemoteTranscode.Common;
+
+namespace RemoteTranscode.Coordinator;
+
+/// <summary>Coordinator settings (coordinator.json standalone, or filled in by the Emby plugin when hosted inside Emby).</summary>
+public sealed class CoordinatorOptions
+{
+    /// <summary>
+    /// Endpoint workers connect to. "https://..." serves TLS itself with a self-signed certificate pinned by the
+    /// workers; "http://127.0.0.1:..." is for running behind a TLS reverse proxy (see <see cref="PublicUrl"/>).
+    /// </summary>
+    public string WorkerUrl { get; set; } = "https://0.0.0.0:8097";
+
+    /// <summary>
+    /// Public HTTPS address of the reverse proxy in front of <see cref="WorkerUrl"/> (e.g. https://coor.example.org).
+    /// When set, pairing codes carry this URL and no pinned fingerprint: workers validate the public certificate.
+    /// </summary>
+    public string? PublicUrl { get; set; }
+
+    public bool ServesTls => WorkerUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Plain HTTP endpoint for the ffmpeg shim; must stay on loopback.</summary>
+    public string ShimUrl { get; set; } = "http://127.0.0.1:8098";
+
+    /// <summary>Holds the certificate, worker registry and shim secret.</summary>
+    public string DataDir { get; set; } = "data";
+
+    /// <summary>Media folders workers may read through /jobs/{id}/files (symbolic links resolved, see <see cref="ServerFiles"/>).</summary>
+    public string[] AllowedRoots { get; set; } = [];
+
+    /// <summary>Folders where Emby's playback outputs may be written (checked by the planner).</summary>
+    public string[] OutputRoots { get; set; } = ["/var/packages/EmbyServer/var/transcoding-temp"];
+
+    /// <summary>
+    /// Optional regular expression on the input path. When set, only matching inputs are offloaded; everything else
+    /// keeps Emby's normal local transcoding. Used to restrict the prototype to dedicated test media.
+    /// </summary>
+    public string? OffloadInputPattern { get; set; }
+
+    /// <summary>A worker silent for this long is dropped and its jobs resume elsewhere.</summary>
+    public int HeartbeatTimeoutSeconds { get; set; } = 15;
+
+    /// <summary>How long a worker has to accept or refuse an offer before the next worker is tried.</summary>
+    public int OfferTimeoutSeconds { get; set; } = 5;
+
+    /// <summary>When a background encode must leave a worker to keep its playbacks smooth.</summary>
+    public PlaybackPrioritySettings PlaybackPriority { get; set; } = new();
+
+    // ---- Background encodes ----
+
+    /// <summary>Encoded chunks waiting for assembly (relative to the configuration folder unless absolute).</summary>
+    public string EncodeSpoolDir { get; set; } = "encode";
+
+    /// <summary>Failed runs (not interruptions) allowed before an encode is marked as failed.</summary>
+    public int EncodeMaxAttempts { get; set; } = 3;
+
+    /// <summary>
+    /// When no worker can take a background encode, encode it on the server itself as Emby would without workers
+    /// (one at a time, normal priority). A worker becoming available takes over from the last chunk.
+    /// </summary>
+    public bool EncodeLocalFallback { get; set; } = true;
+
+    /// <summary>
+    /// How long a conversion waits for a worker before the server encodes it. Not 0: between two slices a worker's slot
+    /// is briefly still taken, and the server would start (and stop again) for nothing. Playback never waits.
+    /// </summary>
+    public int EncodeLocalDelaySeconds { get; set; } = 20;
+
+    /// <summary>
+    /// A conversion the server cannot encode itself (it lacks a filter the workers use) waits this long without any
+    /// capable worker connected before it is given back to Emby, which then converts it with its own command.
+    /// </summary>
+    public int EncodeNoWorkerMinutes { get; set; } = 10;
+
+    /// <summary>
+    /// The server also encodes slices while workers work on the same conversion (one local ffmpeg at a time), except
+    /// slices reserved for a worker and, at the end of a conversion, a slice a busy worker would finish clearly sooner.
+    /// Off: the server only steps in when no worker works on the conversion at all.
+    /// </summary>
+    public bool EncodeLocalAlongsideWorkers { get; set; } = true;
+
+    /// <summary>
+    /// A worker gets its next slice this many seconds (wall time, from its measured speed) before its current one ends,
+    /// so the new ffmpeg's start (source opening, seek, encoder init: ~4 s) overlaps the end of the current one instead
+    /// of leaving the encoder idle. Needs a free slot on the worker (MaxJobs of 2 or more). 0: one slice at a time.
+    /// </summary>
+    public double EncodeOverlapSeconds { get; set; } = 6;
+
+    /// <summary>
+    /// While the workers encode the video, the server converts the conversion's audio ahead with Emby's own options (one
+    /// at a time), so the assembly only copies streams instead of reading the whole source again
+    /// to convert its audio. Used only for the commands where it gives the same file (see AudioAheadPlan); whenever
+    /// it is not ready or not right, the assembly converts the audio as before. Off until validated (audio/video sync).
+    /// </summary>
+    public bool EncodeAudioAhead { get; set; } = false;
+
+    /// <summary>
+    /// Every slice is encoded but the audio converted ahead is not ready yet: the assembly waits for it as long as
+    /// converting the whole audio again would take (what the usual assembly would do), and at least this long.
+    /// </summary>
+    public double EncodeAudioWaitSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Number of items still waiting in Emby's conversion queue (queued or converting), shown on the workers; set by the
+    /// Emby plugin, null result when unknown. Called at most every 30 s.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Func<int?>? ConversionQueueRemaining { get; set; }
+
+    public string ServerFfprobe { get; set; } = "/var/packages/EmbyServer/target/bin/ffprobe";
+    public string ServerFfmpeg { get; set; } = "/var/packages/EmbyServer/target/bin/ffmpeg";
+
+    /// <summary>Emby's binaries resolve their libraries relative to this folder.</summary>
+    public string? ServerToolsWorkingDirectory { get; set; } = "/var/packages/EmbyServer/target";
+
+    /// <summary>Environment Emby gives its ffmpeg (fonts, drivers...); applied to the server's own ffmpeg/ffprobe runs.</summary>
+    public Dictionary<string, string> ServerEnvironment { get; set; } = [];
+
+    /// <summary>Subject alternative names (IPs or host names) for the generated TLS certificate.</summary>
+    public string[] CertificateNames { get; set; } = ["localhost"];
+
+    public string CertificatePath => Path.Combine(DataDir, "coordinator.pfx");
+    public string CertificatePemPath => Path.Combine(DataDir, "coordinator.pem");
+    public string WorkersPath => Path.Combine(DataDir, "workers.json");
+    public string ShimSecretPath => Path.Combine(DataDir, "shim.secret");
+    public string AdminSecretPath => Path.Combine(DataDir, "admin.secret");
+    public string EncodeQueuePath => Path.Combine(DataDir, "encodes.json");
+}

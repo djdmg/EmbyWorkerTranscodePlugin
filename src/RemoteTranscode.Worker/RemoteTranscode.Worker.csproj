@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>EmbyRemoteWorker</AssemblyName>
+    <Version>0.7.13</Version>
+    <!-- Taskbar, shortcuts and installed apps; drawn by tools\make-worker-icon.py. -->
+    <ApplicationIcon>Assets\worker.ico</ApplicationIcon>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="8.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RemoteTranscode.Common\RemoteTranscode.Common.csproj" />
+  </ItemGroup>
+
+  <!-- The worker uninstalls itself (option "uninstall"): same code as the setup, no copy of the setup. -->
+  <ItemGroup>
+    <Compile Include="..\RemoteTranscode.Installer\Setup.cs" Link="Installer\Setup.cs" />
+    <Compile Include="..\RemoteTranscode.Installer\ShellLink.cs" Link="Installer\ShellLink.cs" />
+  </ItemGroup>
+
+</Project>

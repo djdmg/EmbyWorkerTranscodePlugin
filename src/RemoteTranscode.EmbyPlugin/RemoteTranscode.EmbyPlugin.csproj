@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Emby 4.10 runs on .NET 8 and its assemblies target it, so the plugin does too. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>RemoteTranscode.EmbyPlugin</AssemblyName>
+    <RootNamespace>RemoteTranscode.EmbyPlugin</RootNamespace>
+    <Version>0.7.21</Version>
+    <!-- Emby serves plugin pages under a URL that only changes with Emby's own version, so browsers keep old copies:
+         the plugin version is part of the page names (see Plugin.PageSuffix). -->
+    <!-- Letters and digits of the full version (0.6.3 -> 063, 0.7.0-beta.1 -> 070beta1): valid in a page name. -->
+    <PageSuffix>$([System.Text.RegularExpressions.Regex]::Replace('$(Version)', '[^A-Za-z0-9]', ''))</PageSuffix>
+    <!-- Emby server assemblies of the target version (4.10.2), copied from the server. -->
+    <EmbyAssemblies>..\..\research\emby-4.10.2.0</EmbyAssemblies>
+    <!-- Relay builds for each platform, packed by tools/build-plugin.ps1. -->
+    <ShimPackages>..\..\artifacts\plugin-shims</ShimPackages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The coordinator runs inside Emby, which ships ASP.NET Core: referenced, never copied. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Reference Include="MediaBrowser.Common" HintPath="$(EmbyAssemblies)\MediaBrowser.Common.dll" Private="false" />
+    <Reference Include="MediaBrowser.Controller" HintPath="$(EmbyAssemblies)\MediaBrowser.Controller.dll" Private="false" />
+    <Reference Include="MediaBrowser.Model" HintPath="$(EmbyAssemblies)\MediaBrowser.Model.dll" Private="false" />
+  </ItemGroup>
+
+  <!-- One self-contained DLL: the shared code and the coordinator are compiled into the plugin. -->
+  <ItemGroup>
+    <Compile Include="..\RemoteTranscode.Common\*.cs" Link="Common\%(Filename)%(Extension)" />
+    <Compile Include="..\RemoteTranscode.Coordinator\*.cs" Exclude="..\RemoteTranscode.Coordinator\Program.cs" Link="Coordinator\%(Filename)%(Extension)" />
+    <Using Include="System.Net.Http.Json" />
+    <Using Include="Microsoft.AspNetCore.Builder" />
+    <Using Include="Microsoft.AspNetCore.Hosting" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.AspNetCore.Routing" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+    <Using Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Read by Plugin.PageSuffix: the same value as the one written into the page below. -->
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>PageSuffix</_Parameter1>
+      <_Parameter2>$(PageSuffix)</_Parameter2>
+    </AssemblyAttribute>
+    <EmbeddedResource Include="Web\remotetranscode.js" LogicalName="RemoteTranscode.EmbyPlugin.Web.remotetranscode.js" />
+    <EmbeddedResource Include="$(ShimPackages)\*.gz" LogicalName="RemoteTranscode.EmbyPlugin.Shim.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- The page refers to its script by name, which carries the version. -->
+  <Target Name="VersionPageNames" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <VersionedPage>$(IntermediateOutputPath)remotetranscode.html</VersionedPage>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(VersionedPage)" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="$([MSBuild]::Escape($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\Web\remotetranscode.html').Replace('__plugin/remotetranscodejs', '__plugin/remotetranscode$(PageSuffix)js'))))" />
+    <ItemGroup>
+      <EmbeddedResource Include="$(VersionedPage)" LogicalName="RemoteTranscode.EmbyPlugin.Web.remotetranscode.html" />
+    </ItemGroup>
+  </Target>
+
+</Project>

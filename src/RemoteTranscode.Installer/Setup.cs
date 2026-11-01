@@ -1,0 +1,497 @@
+using System.Diagnostics;
+using System.IO.Compression;
+using System.Reflection;
+using Microsoft.Win32;
+
+namespace RemoteTranscode.Installer;
+
+internal sealed record InstallOptions(string Folder, bool StartWithWindows, bool DesktopShortcut, bool Launch, bool KillProcesses);
+
+/// <summary>
+/// Install / uninstall logic, shared by the wizard and the quiet command line. Everything is per-user
+/// (LOCALAPPDATA, APPDATA, HKCU) so no administrator rights are ever needed.
+/// </summary>
+internal static class Setup
+{
+    public const string AppName = "Emby Remote Worker";
+    public const string AppExe = "EmbyRemoteWorker.exe";
+    public const string UninstallExe = "Uninstall.exe";
+    /// <summary>Relative paths of every file the installer wrote; uninstall deletes those and nothing else.</summary>
+    public const string ManifestFile = "install-manifest.txt";
+    private const string DedicatedFolderName = "EmbyRemoteWorker";
+    private const string ProcessName = "EmbyRemoteWorker";
+    // Same key/value/format as WorkerHost.StartWithWindows in the app, so the app's own checkbox stays in sync.
+    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string RunValue = "EmbyRemoteWorker";
+    private const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbyRemoteWorker";
+
+    public static string DefaultFolder =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "EmbyRemoteWorker");
+
+    /// <summary>
+    /// Name of the running worker's kernel objects (same rule as the worker's Program.InstanceName: one instance per
+    /// configuration folder); "-exit" asks it to quit cleanly.
+    /// </summary>
+    public static string InstanceName =>
+        @"Local\EmbyRemoteWorker-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(UserDataFolder.ToLowerInvariant())))[..12];
+
+    public static string UserDataFolder =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EmbyRemoteWorker");
+
+    private static string StartMenuShortcut =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), AppName + ".lnk");
+
+    private static string DesktopShortcut =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), AppName + ".lnk");
+
+    public static string Version
+    {
+        get
+        {
+            string? v = typeof(Setup).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            return v?.Split('+')[0] ?? "0.0.0";
+        }
+    }
+
+    /// <summary>An installation of this user found on the PC, with the choices it was made with.</summary>
+    public sealed record ExistingInstall(string Folder, string? Version, bool StartWithWindows, bool DesktopShortcut, bool Running);
+
+    /// <summary>
+    /// The current installation (registered folder that still holds the app), so an upgrade can keep its folder and
+    /// options without asking; null for a first installation.
+    /// </summary>
+    public static ExistingInstall? FindExisting()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(UninstallKey);
+        if (key?.GetValue("InstallLocation") is not string folder || folder.Length == 0 || !File.Exists(Path.Combine(folder, AppExe)))
+            return null;
+        bool startup;
+        using (var run = Registry.CurrentUser.OpenSubKey(RunKey))
+            startup = run != null && RunValuePointsInside(run, folder);
+        bool desktop = ShellLink.GetTarget(DesktopShortcut) is { } target && IsInside(target, folder);
+        var running = RunningFrom(folder);
+        running.ForEach(p => p.Dispose());
+        return new ExistingInstall(folder, key.GetValue("DisplayVersion") as string, startup, desktop, running.Count > 0);
+    }
+
+    /// <summary>Folder of a previous installation (upgrade keeps it), otherwise the default one.</summary>
+    public static string InitialFolder()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(UninstallKey);
+        return key?.GetValue("InstallLocation") is string s && s.Length > 0 ? s : DefaultFolder;
+    }
+
+    /// <summary>Zip of the published worker app, embedded at build time (-p:PayloadZip); null in a plain solution build.</summary>
+    public static Stream? OpenPayload() => typeof(Setup).Assembly.GetManifestResourceStream("payload.zip");
+
+    public static string? ReadFfmpegLicense()
+    {
+        using var payload = OpenPayload();
+        if (payload is null)
+            return null;
+        using var zip = new ZipArchive(payload, ZipArchiveMode.Read);
+        var entry = zip.Entries.FirstOrDefault(e => e.FullName.Replace('\\', '/').Equals("ffmpeg/LICENSE.txt", StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+            return null;
+        using var reader = new StreamReader(entry.Open());
+        return reader.ReadToEnd();
+    }
+
+    /// <summary>
+    /// Folder the files really go to: the chosen one when it is ours (named EmbyRemoteWorker, holds a previous
+    /// installation) or empty, otherwise an EmbyRemoteWorker subfolder, so the files never mix with someone else's
+    /// (e.g. --dir D:\Apps installs into D:\Apps\EmbyRemoteWorker).
+    /// </summary>
+    public static string ResolveInstallFolder(string chosen)
+    {
+        // TrimEndingDirectorySeparator keeps a drive root ("D:\") valid, unlike TrimEnd.
+        string folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(chosen));
+        bool ours = string.Equals(Path.GetFileName(folder), DedicatedFolderName, StringComparison.OrdinalIgnoreCase)
+            || File.Exists(Path.Combine(folder, ManifestFile))
+            || File.Exists(Path.Combine(folder, AppExe));
+        if (ours || !Directory.Exists(folder) || !Directory.EnumerateFileSystemEntries(folder).Any())
+            return folder;
+        return Path.Combine(folder, DedicatedFolderName);
+    }
+
+    /// <summary>Installs or upgrades; returns the folder actually used (see <see cref="ResolveInstallFolder"/>).</summary>
+    public static string Install(InstallOptions o, IProgress<(int Percent, string Text)> progress)
+    {
+        string folder = ResolveInstallFolder(o.Folder);
+        using var payload = OpenPayload() ?? throw new InvalidOperationException("Ce programme d'installation ne contient pas l'application (payload absent).");
+
+        // Upgrade over a running worker: its exe and DLLs are locked, so it is closed first. Without that (--no-kill),
+        // extraction fails part-way on the first locked file, leaving files of both versions.
+        if (o.KillProcesses)
+        {
+            progress.Report((2, "Fermeture d'Emby Remote Worker…"));
+            CloseRunningApp(folder);
+        }
+
+        progress.Report((5, "Copie des fichiers…"));
+        // The worker itself uninstalls (EmbyRemoteWorker.exe --uninstall): the setup never copies itself anywhere.
+        // An Uninstall.exe left by an older version (a copy of its setup) goes away.
+        string oldUninstaller = Path.Combine(folder, UninstallExe);
+        using (var zip = new ZipArchive(payload, ZipArchiveMode.Read))
+        {
+            var files = new List<(ZipArchiveEntry Entry, string Target)>();
+            foreach (var entry in zip.Entries)
+            {
+                string target = Path.GetFullPath(Path.Combine(folder, entry.FullName));
+                // Zip-slip guard: the payload is ours, but never write outside the chosen folder.
+                if (!IsInside(target, folder))
+                    throw new InvalidDataException($"Entrée d'archive invalide : {entry.FullName}");
+                if (!(entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\')))
+                    files.Add((entry, target));
+            }
+
+            // Upgrade: a file still locked (worker started from elsewhere, --no-kill, antivirus) would make extraction
+            // fail half-way and leave files of both versions. Check everything first, before changing anything.
+            var targets = files.Select(f => f.Target).ToList();
+            EnsureWritable(targets);
+
+            Directory.CreateDirectory(folder);
+            // Written before the copy so even an interrupted installation can be uninstalled cleanly. Entries of a
+            // previous version are kept: their files stay there until the uninstall.
+            WriteManifest(folder, targets.Select(t => Path.GetRelativePath(folder, t)));
+
+            long total = Math.Max(1, files.Sum(f => f.Entry.Length));
+            long done = 0;
+            foreach (var (entry, target) in files)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                progress.Report((5 + (int)(80 * done / total), "Copie de " + entry.FullName.Replace('/', '\\') + "…"));
+                entry.ExtractToFile(target, overwrite: true);
+                done += entry.Length;
+            }
+        }
+
+        try { File.Delete(oldUninstaller); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+
+        progress.Report((90, "Raccourcis…"));
+        string exe = Path.Combine(folder, AppExe);
+        ShellLink.Create(StartMenuShortcut, exe, folder, AppName);
+        if (o.DesktopShortcut)
+            ShellLink.Create(DesktopShortcut, exe, folder, AppName);
+        else
+            DeleteShortcutIfOwned(DesktopShortcut, folder);
+
+        progress.Report((94, "Démarrage avec Windows…"));
+        using (var run = Registry.CurrentUser.CreateSubKey(RunKey))
+        {
+            if (o.StartWithWindows)
+                run.SetValue(RunValue, $"\"{exe}\" --tray");
+            else if (RunValuePointsInside(run, folder))
+                // Only drop our own entry: a value pointing at another copy of the app is not ours to remove.
+                run.DeleteValue(RunValue, false);
+        }
+
+        // HKCU uninstall entry: listed in "Apps & features" for this user only, no elevation needed.
+        progress.Report((97, "Enregistrement dans Applications et fonctionnalités…"));
+        long sizeKb = Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length) / 1024;
+        using (var key = Registry.CurrentUser.CreateSubKey(UninstallKey))
+        {
+            key.SetValue("DisplayName", AppName);
+            key.SetValue("DisplayVersion", Version);
+            key.SetValue("Publisher", "Emby Remote Transcode");
+            key.SetValue("InstallLocation", folder);
+            key.SetValue("DisplayIcon", exe);
+            key.SetValue("UninstallString", $"\"{exe}\" --uninstall");
+            key.SetValue("QuietUninstallString", $"\"{exe}\" --uninstall --quiet");
+            key.SetValue("NoModify", 1, RegistryValueKind.DWord);
+            key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+            key.SetValue("EstimatedSize", (int)Math.Min(int.MaxValue, sizeKb), RegistryValueKind.DWord);
+            key.SetValue("InstallDate", DateTime.Now.ToString("yyyyMMdd"));
+        }
+
+        if (o.Launch)
+        {
+            progress.Report((99, "Lancement d'Emby Remote Worker…"));
+            Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, WorkingDirectory = folder });
+        }
+        progress.Report((100, "Installation terminée."));
+        return folder;
+    }
+
+    /// <summary>Throws, with nothing modified, if any existing target file cannot be overwritten.</summary>
+    private static void EnsureWritable(IEnumerable<string> targets)
+    {
+        foreach (string target in targets)
+        {
+            if (!File.Exists(target))
+                continue;
+            try
+            {
+                // Exclusive write access is exactly what the overwrite needs (fails on a running exe or a loaded DLL).
+                using var _ = new FileStream(target, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                throw new IOException($"Le fichier {target} est utilisé par un autre programme ou protégé en écriture. " +
+                                      "Fermez Emby Remote Worker puis relancez l'installation. Aucun fichier n'a été modifié.", e);
+            }
+        }
+    }
+
+    private static void WriteManifest(string folder, IEnumerable<string> relativePaths)
+    {
+        var entries = new SortedSet<string>(ReadManifest(folder), StringComparer.OrdinalIgnoreCase);
+        entries.UnionWith(relativePaths);
+        entries.Add(ManifestFile);
+        File.WriteAllLines(Path.Combine(folder, ManifestFile), entries);
+    }
+
+    private static IEnumerable<string> ReadManifest(string folder)
+    {
+        string path = Path.Combine(folder, ManifestFile);
+        return File.Exists(path) ? File.ReadAllLines(path).Select(l => l.Trim()).Where(l => l.Length > 0).ToList() : [];
+    }
+
+    /// <summary>
+    /// The interactive uninstall of the installation this executable runs from (EmbyRemoteWorker.exe --uninstall, or
+    /// the Uninstall.exe of older versions): confirmation, optional removal of the user data, then the files.
+    /// </summary>
+    public static int RunUninstall(bool quiet, bool kill, bool removeData)
+    {
+        // The executable always lives in the installation folder it removes.
+        string folder = Path.GetDirectoryName(Environment.ProcessPath)!;
+        if (!quiet)
+        {
+            if (MessageBox.Show($"Désinstaller {AppName} de\n{folder} ?", AppName,
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                return 0;
+            // Data (pairing, configuration, logs) is kept by default so a reinstall does not need a new pairing.
+            removeData = Directory.Exists(UserDataFolder) && MessageBox.Show(
+                $"Supprimer aussi les données utilisateur (configuration, association, journaux) ?\n{UserDataFolder}",
+                AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+        }
+        bool wholeFolder = Uninstall(folder, kill, removeData);
+        if (!quiet)
+            MessageBox.Show($"{AppName} a été désinstallé.", AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        ScheduleFolderDeletion(folder, wholeFolder);
+        return 0;
+    }
+
+    /// <summary>
+    /// Removes the installation that contains the running executable (the worker, or an older Uninstall.exe): only the
+    /// files listed in its manifest, never other content of the folder. The running executable itself and the
+    /// then-empty folder are removed by a detached cmd (<see cref="ScheduleFolderDeletion"/>), since a running exe
+    /// cannot delete its own file. Returns true for an installation made before manifests existed in a dedicated
+    /// EmbyRemoteWorker folder, which is then removed whole as before.
+    /// </summary>
+    public static bool Uninstall(string folder, bool killProcesses, bool removeUserData)
+    {
+        folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        // Our current directory would otherwise keep the folder locked for rmdir.
+        Environment.CurrentDirectory = Path.GetTempPath();
+
+        if (killProcesses)
+            CloseRunningApp(folder);
+
+        using (var run = Registry.CurrentUser.OpenSubKey(RunKey, writable: true))
+        {
+            if (run is not null && RunValuePointsInside(run, folder))
+                run.DeleteValue(RunValue, false);
+        }
+        DeleteShortcutIfOwned(StartMenuShortcut, folder);
+        DeleteShortcutIfOwned(DesktopShortcut, folder);
+
+        bool registeredHere;
+        using (var key = Registry.CurrentUser.OpenSubKey(UninstallKey))
+            registeredHere = key?.GetValue("InstallLocation") is string loc && SamePath(loc, folder);
+        if (registeredHere)
+            Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false);
+
+        if (removeUserData && Directory.Exists(UserDataFolder))
+        {
+            try { Directory.Delete(UserDataFolder, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        if (!File.Exists(Path.Combine(folder, ManifestFile)))
+            return string.Equals(Path.GetFileName(folder), DedicatedFolderName, StringComparison.OrdinalIgnoreCase);
+        RemoveInstalledFiles(folder);
+        return false;
+    }
+
+    private static void RemoveInstalledFiles(string folder)
+    {
+        string self = Path.GetFullPath(Environment.ProcessPath!);
+        var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string relative in ReadManifest(folder))
+        {
+            string path;
+            try { path = Path.GetFullPath(Path.Combine(folder, relative)); }
+            catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { continue; }
+            // The manifest is plain text in a user-writable folder: never follow it outside the installation.
+            if (!IsInside(path, folder) || string.Equals(path, self, StringComparison.OrdinalIgnoreCase))
+                continue;
+            try { File.Delete(path); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            for (string? dir = Path.GetDirectoryName(path); dir != null && IsInside(dir, folder); dir = Path.GetDirectoryName(dir))
+                directories.Add(dir);
+        }
+        // Deepest first; a directory still holding other files stays.
+        foreach (string dir in directories.OrderByDescending(d => d.Length))
+        {
+            try
+            {
+                if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
+                    Directory.Delete(dir);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>
+    /// Last step of an uninstall, called just before exiting (after any final message box): the detached cmd waits
+    /// ~2 s for this process to end, then deletes Uninstall.exe and the folder if nothing else is left in it.
+    /// <paramref name="wholeFolder"/> (legacy dedicated folder without manifest, see <see cref="Uninstall"/>) removes
+    /// it with its content.
+    /// </summary>
+    public static void ScheduleFolderDeletion(string folder, bool wholeFolder)
+    {
+        folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        if (Directory.Exists(folder))
+        {
+            // "ping -n 3" is cmd's portable 2-second wait. Plain "rmdir" only removes an empty folder.
+            string self = Path.GetFullPath(Environment.ProcessPath!);
+            string delete = wholeFolder
+                ? $"rmdir /s /q \"{folder}\""
+                : $"del /f /q \"{self}\" 2>nul & rmdir \"{folder}\" 2>nul";
+            Process.Start(new ProcessStartInfo("cmd.exe", $"/c ping 127.0.0.1 -n 3 >nul & {delete}")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+                WorkingDirectory = Path.GetTempPath(),
+            });
+        }
+    }
+
+    /// <summary>
+    /// Closes EmbyRemoteWorker instances of this user started from <paramref name="folder"/> so their files can be
+    /// replaced, then the bundled ffmpeg/ffprobe still running from that folder (a run outliving its worker would
+    /// keep ffmpeg.exe locked and the update would stop); programs running from any other folder are left alone.
+    /// </summary>
+    private static void CloseRunningApp(string folder)
+    {
+        CloseWorkers(folder);
+        foreach (string name in BundledTools)
+            Kill(RunningFrom(folder, name));
+    }
+
+    // The bundled FFmpeg programs (ffmpeg\ folder of the installation).
+    private static readonly string[] BundledTools = ["ffmpeg", "ffprobe"];
+
+    private static void CloseWorkers(string folder)
+    {
+        // First the way the tray's "Quitter" does it (the running worker hands its jobs back), then, for an older
+        // version without that signal or one that does not answer, a forced stop.
+        if (EventWaitHandle.TryOpenExisting(InstanceName + "-exit", out var exit))
+        {
+            using (exit)
+                exit.Set();
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            while (DateTime.UtcNow < deadline)
+            {
+                var still = RunningFrom(folder);
+                still.ForEach(p => p.Dispose());
+                if (still.Count == 0)
+                    return;
+                Thread.Sleep(250);
+            }
+        }
+        Kill(RunningFrom(folder));
+    }
+
+    private static void Kill(List<Process> processes)
+    {
+        foreach (var p in processes)
+        {
+            using (p)
+            {
+                try
+                {
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit(10_000);
+                }
+                catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException)
+                {
+                }
+            }
+        }
+    }
+
+    /// <summary>Processes named <paramref name="name"/> (the worker by default) of this user's session started from <paramref name="folder"/>; the caller disposes them.</summary>
+    private static List<Process> RunningFrom(string folder, string name = ProcessName)
+    {
+        using var current = Process.GetCurrentProcess();
+        int session = current.SessionId;
+        var found = new List<Process>();
+        foreach (var p in Process.GetProcessesByName(name))
+        {
+            try
+            {
+                // The worker uninstalling itself is not one to close.
+                if (p.Id == current.Id)
+                {
+                    p.Dispose();
+                    continue;
+                }
+                // MainModule throws for processes of other users / higher integrity: those are skipped.
+                if (p.SessionId == session && p.MainModule?.FileName is { } path && IsInside(Path.GetFullPath(path), folder))
+                {
+                    found.Add(p);
+                    continue;
+                }
+            }
+            catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException)
+            {
+            }
+            p.Dispose();
+        }
+        return found;
+    }
+
+    private static bool RunValuePointsInside(RegistryKey run, string folder) =>
+        run.GetValue(RunValue) is string cmd && ExtractExe(cmd) is { } exe && IsInside(exe, folder);
+
+    private static string? ExtractExe(string command)
+    {
+        command = command.Trim();
+        if (command.StartsWith('"'))
+        {
+            int end = command.IndexOf('"', 1);
+            return end > 1 ? command[1..end] : null;
+        }
+        int space = command.IndexOf(' ');
+        return space < 0 ? command : command[..space];
+    }
+
+    private static void DeleteShortcutIfOwned(string link, string folder)
+    {
+        string? target = ShellLink.GetTarget(link);
+        if (target is not null && IsInside(target, folder))
+            File.Delete(link);
+    }
+
+    /// <summary>True when <paramref name="path"/> is strictly below <paramref name="folder"/> (trailing separator compared, so "X2" is not inside "X").</summary>
+    private static bool IsInside(string path, string folder)
+    {
+        try
+        {
+            return Path.GetFullPath(path).StartsWith(folder.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(Path.GetFullPath(a).TrimEnd('\\'), Path.GetFullPath(b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+}
