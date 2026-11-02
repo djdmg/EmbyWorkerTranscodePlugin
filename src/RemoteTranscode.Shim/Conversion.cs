@@ -201,7 +201,7 @@ public sealed class ConversionSession : IDisposable
     private async Task<double?> FileStartAsync(string path)
     {
         using var doc = JsonDocument.Parse(await RunProbeAsync(["-v", "error", "-show_entries", "format=start_time", "-print_format", "json", path]));
-        return doc.RootElement.TryGetProperty("format", out var format) && format.TryGetProperty("start_time", out var st) && TryNumber(st.GetString(), out double start)
+        return doc.RootElement.TryGetProperty("format", out var format) && format.TryGetProperty("start_time", out var st) && double.TryParse(st.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double start)
             ? start
             : null;
     }

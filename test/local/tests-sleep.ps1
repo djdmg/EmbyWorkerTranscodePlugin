@@ -908,7 +908,8 @@ function T29 {
     $out = Join-Path $Paths.Out 'conv-t29.mp4'
     $s = Start-Shim (New-ConversionArgs -InputPath $src -OutputPath $out -Rate '25') 't29'
     $code = Wait-Exit $s 1500
-    $sv = First-Pts $src 'v:0'; $sa = First-Pts $src 'a:0'
+    # Le premier paquet d'un flux AC-3 est à -0,005 s pour un flux qui commence à 0 : c'est le début du flux qui compte dans la source.
+    $sv = First-Pts $src 'v:0'; $sa = [double]::Parse("$(& $Paths.ServerFfprobe -v error -select_streams a:0 -show_entries stream=start_time -of csv=p=0 $src)".Trim().Split(',')[0], [cultureinfo]::InvariantCulture)
     $ov = First-Pts $out 'v:0'; $oa = (First-Pts $out 'a:0') + 1024 / 48000
     $gap = [math]::Abs(($oa - $ov) - ($sa - $sv)) * 1000
     $ok = $code -eq 0 -and $gap -le 1
