@@ -6,6 +6,14 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.33 — 02/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.33). Worker inchangé (0.7.18).
+
+### Ajouté
+
+- **Plugin** — `POST /RemoteTranscode/AudioAhead` active ou désactive `EncodeAudioAhead` sur un vrai serveur, pour les conversions capturées ensuite, sans redémarrage. L'option reste désactivée par défaut, sans bouton sur la page : jusqu'ici, elle n'était réglable qu'au banc et ne pouvait donc pas être validée avec le ffmpeg 5.1 d'Emby.
+
 ## Plugin 0.7.32 — 02/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.32). Worker inchangé (0.7.18).

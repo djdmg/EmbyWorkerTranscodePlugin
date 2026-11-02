@@ -54,6 +54,13 @@ public sealed class SetEnabled : IReturnVoid
     public bool Enabled { get; set; }
 }
 
+[Route("/RemoteTranscode/AudioAhead", "POST", Summary = "Switches the audio converted ahead on or off (experimental, off by default)")]
+[Authenticated(Roles = "Admin")]
+public sealed class SetAudioAhead : IReturnVoid
+{
+    public bool Enabled { get; set; }
+}
+
 [Route("/RemoteTranscode/ReportFailures", "POST", Summary = "Switches the anonymous GitHub reports of failed conversions on or off")]
 [Authenticated(Roles = "Admin")]
 public sealed class SetReportFailures : IReturnVoid
@@ -98,6 +105,16 @@ public sealed class RemoteTranscodeApi : IService, IRequiresRequest
         // Applied, then saved only if Emby accepted it, under the runtime's start gate (see SetEnabledAsync).
         string? problem = await runtime.SetEnabledAsync(request.Enabled).ConfigureAwait(false);
         return problem != null ? Error(HttpStatusCode.Conflict, problem) : SettingsResult();
+    }
+
+    /// <summary>Applied to the conversions captured from now on, no restart (see Runtime.SetAudioAhead).</summary>
+    public object Post(SetAudioAhead request)
+    {
+        var runtime = Runtime.Instance;
+        if (Plugin.Instance is null || runtime is null)
+            return Error(HttpStatusCode.ServiceUnavailable, "plugin non initialisé");
+        runtime.SetAudioAhead(request.Enabled);
+        return SettingsResult();
     }
 
     /// <summary>Applied to the running coordinator at once, no restart (see Runtime.SetReportFailures).</summary>

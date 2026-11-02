@@ -295,6 +295,7 @@ public sealed class Runtime : IDisposable
             CertificateNames = CertificateNames(),
             ConversionQueueRemaining = syncQueue.Remaining,
             IssueReporting = config.ReportFailures,
+            EncodeAudioAhead = config.EncodeAudioAhead,
             IssueReportToken = IssueReportToken,
             ServerDescription = ServerDescription(),
         };
@@ -323,6 +324,18 @@ public sealed class Runtime : IDisposable
         plugin.SaveConfiguration();
         if (options != null)
             options.IssueReporting = enabled;
+    }
+
+    /// <summary>Audio converted ahead, for the conversions captured from now on (no restart), and saved.</summary>
+    public void SetAudioAhead(bool enabled)
+    {
+        var plugin = Plugin.Instance;
+        if (plugin is null)
+            return;
+        plugin.Configuration.EncodeAudioAhead = enabled;
+        plugin.SaveConfiguration();
+        if (options != null)
+            options.EncodeAudioAhead = enabled;
     }
 
     /// <summary>The server as a failure report describes it: "Linux x64, Emby 4.10.2" (no host name, no kernel string).</summary>

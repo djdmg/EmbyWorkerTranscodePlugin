@@ -100,4 +100,10 @@ public sealed class PluginConfiguration : BasePluginConfiguration
     /// On by default; does nothing in a build without a report token.
     /// </summary>
     public bool ReportFailures { get; set; } = true;
+
+    /// <summary>
+    /// Converts a conversion's audio ahead on the server (CoordinatorOptions.EncodeAudioAhead). Off until validated on
+    /// a real server; no switch on the page, set through POST /RemoteTranscode/AudioAhead.
+    /// </summary>
+    public bool EncodeAudioAhead { get; set; } = false;
 }

@@ -8,6 +8,14 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.33 — 2026-11-02
+
+Built and published by GitHub Actions (release v0.7.33). Worker unchanged (0.7.18).
+
+### Added
+
+- **Plugin** — `POST /RemoteTranscode/AudioAhead` switches `EncodeAudioAhead` on a real server, for the conversions captured from then on, without a restart. It stays off by default, with no switch on the page: until now it could only be set on the bench, so it could not be validated with Emby's ffmpeg 5.1.
+
 ## Plugin 0.7.32 — 2026-11-02
 
 Built and published by GitHub Actions (release v0.7.32). Worker unchanged (0.7.18).
