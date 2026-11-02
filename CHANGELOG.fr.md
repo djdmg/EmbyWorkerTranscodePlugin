@@ -6,6 +6,24 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.34 et worker 0.7.19 — 02/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.34).
+
+### Corrigé
+
+- **Plugin et worker** — Quand le ffmpeg du serveur et celui d'un worker lisent le début d'un fichier à un écart supérieur à la marge de seek (0 et 0,021 s à 25 i/s, marge de 20 ms), chaque tranche d'un worker commençait une image trop tard, avec une image répétée ou sautée à la rencontre d'une tranche du serveur, et une dernière tranche sur un worker perdait sa dernière image. Le contrôle de la conversion acceptait ces fichiers. Le coordinateur envoie désormais le début qu'il lit (`ServerFileStart`), et le worker déplace son `-ss` de la différence et la signale (`SeekCorrection`), ce qui ramène les temps des morceaux à ceux du serveur. Les workers plus anciens l'ignorent et se comportent comme avant. Test de banc T27 : 7499 images sur 7500 sans la correction, 7500 avec.
+- **Plugin** — `EncodeAudioAhead` : le MP4 préparé écrivait son décalage dans l'échelle de temps par défaut du film (1000), arrondie à la milliseconde, et tout l'audio sortait 0,667 ms en avance. Il utilise désormais `-movie_timescale 28224000`. Mesuré avec le ffmpeg 5.1 d'Emby sur 3 minutes d'audio : 0,000000 s d'écart avec la conversion classique, paquets de mêmes tailles.
+- **Plugin** — Une dernière tranche dont l'exécution était arrêtée une fois tout encodé (un worker qui se libère juste à la fin de l'exécution du serveur) reprenait sur sa dernière image, présente ensuite deux fois dans la vidéo assemblée. La tranche se termine désormais là.
+- **Plugin** — Dernière tranche : les longueurs des morceaux sont arrondies à un nombre entier d'images quand la commande d'Emby fixe la fréquence (`-r`). Un décalage de liste restait dans la longueur du premier morceau d'une exécution (54 ms entre deux images à 25 i/s, le reste de la tranche 14 ms en retard).
+
+### Banc
+
+- T27 : début de fichier lu à 21 ms d'écart à 25 i/s, sans et avec la correction.
+- T28 : `EncodeAudioAhead` comparé à l'assemblage classique sur 10 types de fichiers (AC-3, E-AC-3, DTS, FLAC, Opus, MP3, deux pistes à 48 et 44,1 kHz, HEVC 10 bits, audio commençant 0,5 s plus tard, MPEG-TS, de 23,976 à 29,97 i/s). Aucun paquet ne diffère. Les sources MPEG-TS restent sur l'assemblage classique, par conception.
+
+`EncodeAudioAhead` reste désactivé par défaut.
+
 ## Plugin 0.7.33 — 02/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.33). Worker inchangé (0.7.18).

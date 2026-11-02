@@ -818,3 +818,134 @@ function T26 {
     Add-Result 'T26' 'Source MP4 à start_time 0,062/0,124 avec le -r d''Emby : à l''image près' $(if ($ok) { 'PASS' } else { 'FAIL' }) (
         "source : $($srcV.Frames) images, {0:0.000}s | sortie : $oText | contrôle : « $verify » | final : $(Prop $e 'Status'), workers $(Prop $e 'Worker') | « $assembled » | code $code" -f $srcV.Duration)
 }
+# Source à 25 i/s dont le début est lu 21 ms plus tard par le ffmpeg des workers que par celui d'Emby : plus d'une demi-image,
+# donc la marge de seek (20 ms) ne suffit pas. Le faux ffprobe reproduit l'écart du vrai serveur. T27a, sans correction de -ss
+# (marge imposée de 20 ms, qui coupe aussi l'envoi du début lu par le serveur) : la dernière tranche perd sa dernière image,
+# c'est le défaut constaté le 02/11. T27b, avec correction : à l'image près.
+#   pwsh -File run-tests.ps1 -Only T27
+function T27 {
+    $dst = Join-Path $Paths.Media 'film_25_start21.mkv'
+    if (-not (Test-Path $dst)) {
+        $tmp = Join-Path $Paths.Media 'film_25_start21.tmp.mkv'
+        & $Paths.WorkerFfmpeg -y -hide_banner -v error -t 300 -f lavfi -i 'testsrc2=size=1280x720:rate=25' -t 300 -f lavfi -i 'anullsrc=r=48000:cl=stereo' -map 0:v -map 1:a -c:v libx264 -preset ultrafast -g 100 -keyint_min 100 -pix_fmt yuv420p -c:a aac $tmp
+        if ($LASTEXITCODE) { throw 'génération de la source en échec' }
+        & $Paths.ServerFfmpeg -hide_banner -v error -y -i $tmp -map 0 -c copy -output_ts_offset 0.021 $dst
+        if ($LASTEXITCODE) { throw 'remux de la source en échec' }
+        Remove-Item $tmp -Force
+    }
+    $fakeProbe = [IO.Path]::Combine($Paths.Work, 'bin', 'fake-emby-ffprobe', 'fake-emby-ffprobe.exe')
+    if (-not (Test-Path $fakeProbe)) {
+        & dotnet publish (Join-Path $PSScriptRoot 'fake-emby-ffprobe') -c Release -o (Split-Path $fakeProbe) --nologo -v q | Out-Null
+        if ($LASTEXITCODE) { throw 'publication du faux ffprobe en échec' }
+    }
+    Set-Content (Join-Path (Split-Path $fakeProbe) 'fake-emby-ffprobe.txt') $Paths.ServerFfprobe -Encoding ascii
+    $srcV = Measure-Video $dst
+    try {
+        foreach ($variant in @(
+                @{ Id = 'a'; Options = @{ EncodeLocalAlongsideWorkers = $false; ServerFfprobe = $fakeProbe; EncodeSeekMarginSeconds = 0.02 }; Fixed = $false; Label = 'sans correction, le défaut est reproduit' },
+                @{ Id = 'b'; Options = @{ EncodeLocalAlongsideWorkers = $false; ServerFfprobe = $fakeProbe }; Fixed = $true; Label = 'avec correction, à l''image près' })) {
+            Restart-BenchCoordinator $variant.Options "coordinator-before-t27$($variant.Id)"
+            Ensure-Workers @('w1', 'w2')
+            $name = "t27$($variant.Id)"
+            $out = Join-Path $Paths.Out "conv-$name.mp4"
+            $s = Start-Shim (New-ConversionArgs -InputPath $dst -OutputPath $out -Rate '25') $name
+            $code = Wait-Exit $s 1800
+            $outV = if (Test-Path $out) { Measure-Video $out } else { $null }
+            $verify = Log-Excerpt "shim-$name" 'source .*sultat|rejet' 1
+            $assembled = Log-Excerpt 'coordinator' 'assembled from chunks' 100 | Select-Object -Last 1
+            $r = Get-ConversionRunners $out
+            $exact = $outV -and $outV.Frames -eq $srcV.Frames
+            $ok = if ($variant.Fixed) { $code -eq 0 -and $exact -and ($verify -join ' ') -notmatch 'rejet' -and $r.LocalRuns -eq 0 } else { -not $exact }
+            $oText = if ($outV) { '{0} images, {1:0.000}s' -f $outV.Frames, $outV.Duration } else { 'absente' }
+            Add-Result "T27$($variant.Id)" "Source 25 i/s, début lu à 21 ms d'écart : $($variant.Label)" $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+                "source : $($srcV.Frames) images, {0:0.000}s | sortie : $oText | contrôle : « $verify » | workers : $($r.Workers -join ', '), tranches serveur : $($r.LocalRuns) | « $assembled » | code $code" -f $srcV.Duration)
+        }
+    } finally { Restart-BenchCoordinator @{} 'coordinator-t27' }
+    Ensure-Workers @('w1', 'w2')
+}
+# Preuve de concept : l'audio converti à l'avance sur plusieurs types de fichiers. Chaque source est convertie deux fois,
+# assemblage classique et audio à l'avance, puis comparée paquet par paquet (Compare-Conversions : temps, tailles, MD5 du
+# compressé et du décodé). Critère : aucun écart, et la vidéo garde le nombre d'images attendu.
+#   pwsh -File run-tests.ps1 -Only T28
+function New-T28Source([hashtable]$c) {
+    $dst = Join-Path $Paths.Media "t28_$($c.Id).$($c.Ext)"
+    if (Test-Path $dst) { return $dst }
+    $tmp = Join-Path $Paths.Media "t28_$($c.Id).tmp.$($c.Ext)"
+    $ff = @('-y', '-hide_banner', '-v', 'error', '-t', '150', '-f', 'lavfi', '-i', "testsrc2=size=1280x720:rate=$($c.Rate)")
+    $maps = @('-map', '0:v')
+    $n = 1
+    foreach ($a in $c.Audio) {
+        $ff += @('-t', '150', '-f', 'lavfi', '-i', "sine=frequency=$(300 + 100 * $n):sample_rate=$($a.Hz),aformat=channel_layouts=$($a.Layout)")
+        $maps += @('-map', "${n}:a")
+        $n++
+    }
+    $ff += $maps + $c.Video
+    for ($i = 0; $i -lt $c.Audio.Count; $i++) { $ff += @("-c:a:$i", $c.Audio[$i].Codec) + @($c.Audio[$i].Options) }
+    $ff += @($tmp)
+    & $Paths.WorkerFfmpeg @ff
+    if ($LASTEXITCODE) { throw "génération de la source $($c.Id) en échec" }
+    Move-Item $tmp $dst -Force
+    $dst
+}
+
+function T28 {
+    Restart-BenchCoordinator @{ EncodeAudioAhead = $true } 'coordinator-before-t28'
+    try { T28Core } finally { Restart-BenchCoordinator @{} 'coordinator-t28' }
+}
+
+function T28Core {
+    Ensure-Workers @('w1', 'w2')
+    New-Item -ItemType Directory -Force (Split-Path $Paths.ShimClassic) | Out-Null
+    Copy-Item $Paths.Shim $Paths.ShimClassic -Force
+    Write-ShimConfig $Paths.ShimClassic -useAudioAhead $false
+    $x264 = @('-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-g', '48')
+    $x265 = @('-c:v', 'libx265', '-preset', 'ultrafast', '-x265-params', 'log-level=none', '-pix_fmt', 'yuv420p10le', '-g', '48')
+    $cases = @(
+        @{ Id = 'ac3_51_25'; Label = 'MKV H.264 25 i/s, AC-3 5.1 48 kHz'; Ext = 'mkv'; Rate = '25'; Video = $x264; Audio = @(@{ Hz = 48000; Layout = '5.1'; Codec = 'ac3'; Options = @('-b:a', '448k') }); Tracks = @(1) },
+        @{ Id = 'eac3_st_2398'; Label = 'MKV H.264 23,976 i/s, E-AC-3 stéréo 48 kHz'; Ext = 'mkv'; Rate = '24000/1001'; Video = $x264; Audio = @(@{ Hz = 48000; Layout = 'stereo'; Codec = 'eac3'; Options = @('-b:a', '192k') }); Tracks = @(1) },
+        @{ Id = 'dts_51_2997'; Label = 'MKV H.264 29,97 i/s, DTS 5.1 48 kHz'; Ext = 'mkv'; Rate = '30000/1001'; Video = $x264; Audio = @(@{ Hz = 48000; Layout = '5.1'; Codec = 'dca'; Options = @('-strict', '-2', '-b:a', '768k') }); Tracks = @(1) },
+        @{ Id = 'flac_441_24'; Label = 'MKV H.264 24 i/s, FLAC stéréo 44,1 kHz'; Ext = 'mkv'; Rate = '24'; Video = $x264; Audio = @(@{ Hz = 44100; Layout = 'stereo'; Codec = 'flac'; Options = @() }); Tracks = @(1) },
+        @{ Id = 'opus_st_25'; Label = 'MKV H.264 25 i/s, Opus stéréo 48 kHz'; Ext = 'mkv'; Rate = '25'; Video = $x264; Audio = @(@{ Hz = 48000; Layout = 'stereo'; Codec = 'libopus'; Options = @('-b:a', '128k') }); Tracks = @(1) },
+        @{ Id = 'mp3_441_mp4'; Label = 'MP4 H.264 25 i/s, MP3 stéréo 44,1 kHz'; Ext = 'mp4'; Rate = '25'; Video = $x264; Audio = @(@{ Hz = 44100; Layout = 'stereo'; Codec = 'libmp3lame'; Options = @('-b:a', '192k') }); Tracks = @(1); Format = 'mov,mp4,m4a,3gp,3g2,mj2' },
+        @{ Id = 'two_tracks'; Label = 'MKV H.264 25 i/s, 2 pistes AC-3 48 kHz + FLAC 44,1 kHz'; Ext = 'mkv'; Rate = '25'; Video = $x264; Audio = @(@{ Hz = 48000; Layout = '5.1'; Codec = 'ac3'; Options = @('-b:a', '384k') }, @{ Hz = 44100; Layout = 'stereo'; Codec = 'flac'; Options = @() }); Tracks = @(1, 2) },
+        @{ Id = 'hevc10_eac3'; Label = 'MKV HEVC 10 bits 25 i/s, E-AC-3 5.1 48 kHz'; Ext = 'mkv'; Rate = '25'; Video = $x265; Audio = @(@{ Hz = 48000; Layout = '5.1'; Codec = 'eac3'; Options = @('-b:a', '384k') }); Tracks = @(1); Codec = 'hevc' },
+        @{ Id = 'late_audio'; Label = 'MKV H.264 25 i/s, audio qui commence 0,5 s après la vidéo'; Ext = 'mkv'; Rate = '25'; Video = $x264; Audio = @(@{ Hz = 48000; Layout = 'stereo'; Codec = 'ac3'; Options = @('-b:a', '192k') }); Tracks = @(1) },
+        @{ Id = 'mpegts'; Label = 'MPEG-TS H.264 25 i/s, AC-3 stéréo, début de fichier à 1,4 s'; Ext = 'ts'; Rate = '25'; Video = $x264; Audio = @(@{ Hz = 48000; Layout = 'stereo'; Codec = 'ac3'; Options = @('-b:a', '192k') }); Tracks = @(1); Format = 'mpegts'; ClassicOnly = $true }
+    )
+    foreach ($c in $cases) {
+        if ($c.Id -eq 'late_audio') {
+            # Deux entrées pour décaler l'audio seul : la vidéo telle quelle, l'audio repoussé de 0,5 s.
+            $dst = Join-Path $Paths.Media 't28_late_audio.mkv'
+            if (-not (Test-Path $dst)) {
+                $base = New-T28Source @{ Id = 'late_base'; Ext = 'mkv'; Rate = '25'; Video = $x264; Audio = $c.Audio }
+                & $Paths.ServerFfmpeg -hide_banner -v error -y -i $base -itsoffset 0.5 -i $base -map 0:v -map 1:a -c copy $dst
+                if ($LASTEXITCODE) { throw 'remux late_audio en échec' }
+            }
+            $src = $dst
+        } else { $src = New-T28Source $c }
+        $format = if ($c.ContainsKey('Format')) { $c.Format } else { 'matroska,webm' }
+        $codec = if ($c.ContainsKey('Codec')) { $c.Codec } else { 'h264' }
+        $res = @{}
+        foreach ($k in @('classic', 'ahead')) {
+            $name = "t28-$($c.Id)-$k"
+            $out = Join-Path $Paths.Out "conv-$name.mp4"
+            $exe = if ($k -eq 'classic') { $Paths.ShimClassic } else { $Paths.Shim }
+            $s = Start-Shim (New-ConversionArgs -InputPath $src -OutputPath $out -AudioStreams $c.Tracks -InputFormat $format -InputCodec $codec -Rate $c.Rate) $name $exe
+            $code = Wait-Exit $s 1500
+            $res[$k] = [pscustomobject]@{
+                Out = $out; Code = $code; Summary = Encode-Summary $out
+                Video = if (Test-Path $out) { Measure-Video $out } else { $null }
+                Ahead = [bool](Log-Excerpt "shim-$name" 'audio converti à l''avance par le serveur' 1)
+                Verify = Log-Excerpt "shim-$name" 'source .*sultat|rejet' 1
+            }
+        }
+        $cl = $res['classic']; $ah = $res['ahead']
+        $cmp = if ($cl.Video -and $ah.Video) { Compare-Conversions $cl.Out $ah.Out } else { @{ Ok = $false; Text = 'sortie absente' } }
+        $srcV = Measure-Video $src
+        $usedAsExpected = $ah.Ahead -ne $c.ContainsKey('ClassicOnly')
+        $ok = $cl.Code -eq 0 -and $ah.Code -eq 0 -and $usedAsExpected -and -not $cl.Ahead -and $cmp.Ok `
+            -and $cl.Video.Frames -eq $ah.Video.Frames -and ($ah.Verify -join ' ') -notmatch 'rejet'
+        Add-Result "T28-$($c.Id)" $c.Label $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+            "source $($srcV.Frames) images ; classique $($cl.Video.Frames), à l'avance $($ah.Video.Frames) ; utilisé : $($ah.Ahead) ; audio : « $(Prop $ah.Summary 'Audio') » ; contrôle : « $($ah.Verify -join ' / ') » ; codes $($cl.Code)/$($ah.Code) | $($cmp.Text)")
+    }
+}

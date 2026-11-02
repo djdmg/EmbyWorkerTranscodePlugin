@@ -29,6 +29,95 @@ public class SliceChunkTests
     }
 
     [Fact]
+    public void A_run_with_a_moved_seek_goes_back_to_the_servers_times()
+    {
+        // Worker's ffmpeg reads the file 21 ms later than the server's: it lists its chunks 21 ms under the server's times.
+        var slice = new EncodeSlice { Index = 1, Start = 120, End = 240 };
+        var task = Task(slice);
+        slice.RunStartSeconds = 120;
+        slice.RunStartIndex = 100;
+        task.AddChunk(slice, 100, 0, 149.979, 1);
+        task.AddChunk(slice, 101, 149.979, 239.979, 1);
+        task.ShiftRun(slice, 0.021);
+        Assert.Equal(120, task.Chunks.Single(c => c.Index == 100).Start);
+        Assert.Equal(150, task.Chunks.Single(c => c.Index == 101).Start, 6);
+        Assert.Equal(240, task.EncodedEnd(slice), 6);
+    }
+
+    [Fact]
+    public void Last_slice_chunks_hold_whole_frames_with_an_output_rate()
+    {
+        // Emby's ffmpeg lists the second chunk 14 ms late: the first chunk would last 5.974 s for 5.96 s of frames.
+        var slice = new EncodeSlice { Index = 0, Start = 7469.546, End = 7499.52, Last = true, SeekMargin = 0.02 };
+        var task = new EncodeTask
+        {
+            Id = "t", Input = "/in.mkv", Output = "/out.mp4",
+            ChunkTemplate = ["-copyts", "-i", "{input:0}", "-r:v:0", "25"],
+            Requirements = new JobRequirements("libx264", []),
+            Source = new SourceInfo(7499.52, 1920, 1080, null, 1, 0),
+            Slices = [slice],
+        };
+        task.Chunks.Add(new EncodeChunk(0, 7469.546, 7475.52, 1));
+        task.Chunks.Add(new EncodeChunk(1, 7475.52, 7499.48, 1));
+        Assert.Equal(5.96, task.ConcatDurations(slice)[0].Duration, 6);
+    }
+
+    [Fact]
+    public void Chunk_lengths_are_not_rounded_without_an_output_rate()
+    {
+        var last = new EncodeSlice { Index = 0, Start = 100, End = 200, Last = true, SeekMargin = 0.02 };
+        var task = Task(last);
+        task.Chunks.Add(new EncodeChunk(0, 100, 105.974, 1));
+        task.Chunks.Add(new EncodeChunk(1, 105.974, 200, 1));
+        Assert.Equal(5.974, task.ConcatDurations(last)[0].Duration, 6);
+    }
+
+    [Theory]
+    [InlineData("25", 0.04)]
+    [InlineData("24000/1001", 0.0417083)]
+    [InlineData("23.976024627685547", 0.0417084)]
+    public void Output_frame_time_comes_from_the_rate(string rate, double expected)
+    {
+        var task = new EncodeTask
+        {
+            Id = "t", Input = "/in.mkv", Output = "/out.mp4", ChunkTemplate = ["-i", "x", "-r:v:0", rate],
+            Requirements = new JobRequirements("libx264", []), Slices = [],
+        };
+        Assert.Equal(expected, task.OutputFrameTime()!.Value, 5);
+    }
+
+    [Theory]
+    [InlineData(0, 0.021, 0.021)]
+    [InlineData(0.021, 0, -0.021)]
+    [InlineData(0.5, 0.5, 0)]
+    [InlineData(0, 0.0001, 0)]
+    [InlineData(0, 60, 0)]
+    public void Seek_correction_is_the_difference_of_starts(double server, double own, double expected) =>
+        Assert.Equal(expected, EmbyConversionPlanner.SeekCorrection(server, own), 6);
+
+    [Fact]
+    public void Shift_seek_moves_the_input_seek_only()
+    {
+        string[] args = ["-copyts", "-ss", "7469.526", "-t", "29.98", "-i", "x", "-ss", "5", "out"];
+        Assert.Equal(["-copyts", "-ss", "7469.505", "-t", "29.98", "-i", "x", "-ss", "5", "out"], EmbyConversionPlanner.ShiftSeek(args, 0.021));
+        Assert.Equal("0", EmbyConversionPlanner.ShiftSeek(["-ss", "0.01", "-i", "x"], 0.021)[1]);
+    }
+
+    [Theory]
+    [InlineData(699.990967, 699.949, 0.0208, true)]    // chunks end one frame past the last frame: everything is encoded
+    [InlineData(699.949, 699.949, 0.0208, false)]      // a frame is still there
+    [InlineData(699.96, 699.949, 0.0208, false)]       // a listing shift
+    [InlineData(650.0, 649.9, 0.0208, false)]          // far from the end: a hole in the video
+    [InlineData(699.990967, 699.949, 0.001, true)]     // frame gap unknown
+    public void Resume_past_the_last_frame_is_told_from_a_listing_shift(double listed, double frame, double margin, bool expected)
+    {
+        var slice = new EncodeSlice { Index = 0, Start = 670, End = 700, Last = true, SeekMargin = margin };
+        var task = Task(slice);
+        task.Source = new SourceInfo(700, 1920, 1080, null, 1, 0);
+        Assert.Equal(expected, task.ResumePastLastFrame(slice, listed, frame));
+    }
+
+    [Fact]
     public void Source_time_listing_is_kept()
     {
         // Upstream ffmpeg with -copyts (workers): times in the source, first chunk listed from 0.

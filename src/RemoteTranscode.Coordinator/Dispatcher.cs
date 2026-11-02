@@ -258,7 +258,7 @@ public sealed class Dispatcher(CoordinatorOptions options, ILogger<Dispatcher> l
             onCreated?.Invoke(job);
             var offer = new JobOffer(job.Id, kind, plan.Template,
                 plan.Files.Select(f => new JobFile(f.Id, f.Kind, f.Name, f.Size)).ToArray(),
-                plan.SegmentSeconds, plan.StartIndex, job.Token, plan.Prefetch, plan.Slice);
+                plan.SegmentSeconds, plan.StartIndex, job.Token, plan.Prefetch, plan.Slice, plan.ServerFileStart);
             // Set once the job's fate no longer belongs to this method (running, or accepted then ended elsewhere).
             bool handedOff = false;
             // Set when the job was lost or stopped by another path while the offer was pending.

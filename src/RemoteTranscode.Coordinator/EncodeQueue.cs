@@ -59,6 +59,8 @@ public sealed class EncodeSlice
     /// <summary>How far below a frame's time this slice's runs set -ss and -t (EmbyConversionPlanner.SeekMargin).</summary>
     [JsonIgnore]
     public double SeekMargin { get; init; } = EmbyConversionPlanner.FrameMargin;
+    /// <summary>The file's start as the server's ffmpeg reads it, for the workers (see <see cref="JobOffer"/>); null: not sent.</summary>
+    public double? ServerFileStart { get; init; }
 
     /// <summary>The scheduler was woken once for the current run nearing its end, to start the worker's next slice ahead.</summary>
     [JsonIgnore]
@@ -235,6 +237,40 @@ public sealed class EncodeTask
     /// </summary>
     public static double ListingTolerance(EncodeSlice slice) => Math.Max(MaxStartShift, slice.SeekMargin * 1.1);
 
+    /// <summary>
+    /// The worker moved its -ss by <paramref name="correction"/> because its ffmpeg reads another file start
+    /// (EmbyConversionPlanner.SeekCorrection): it listed its chunks from its own start, so they go back to the server's by
+    /// the same amount. Like <see cref="AlignRunEnd"/>, the run's first chunk keeps its start. Call under the lock.
+    /// </summary>
+    public void ShiftRun(EncodeSlice slice, double correction)
+    {
+        int end = slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice;
+        for (int i = 0; i < Chunks.Count; i++)
+        {
+            var c = Chunks[i];
+            if (c.Index < slice.RunStartIndex || c.Index >= end)
+                continue;
+            Chunks[i] = c with { Start = c.Index == slice.RunStartIndex ? c.Start : c.Start + correction, End = c.End + correction };
+        }
+    }
+
+    /// <summary>Time of one output frame when Emby's command sets the frame rate (-r): chunks then hold whole frames. Null otherwise.</summary>
+    public double? OutputFrameTime()
+    {
+        for (int i = 0; i + 1 < ChunkTemplate.Length; i++)
+        {
+            if (ChunkTemplate[i] != "-r" && !ChunkTemplate[i].StartsWith("-r:", StringComparison.Ordinal))
+                continue;
+            string[] parts = ChunkTemplate[i + 1].Split('/');
+            if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double rate))
+                return null;
+            if (parts.Length == 2 && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double den) && den > 0)
+                rate /= den;
+            return rate > 0 ? 1 / rate : null;
+        }
+        return null;
+    }
+
     public void AlignRunEnd(EncodeSlice slice)
     {
         if (slice.Last)
@@ -280,6 +316,21 @@ public sealed class EncodeTask
     public bool EndsAtVideoEnd(EncodeSlice slice) =>
         slice.Last && slice.IdleRuns >= 2 && slice.RunStartIndex > slice.FirstChunk
         && ContiguousChunks(slice) == slice.RunStartIndex - slice.FirstChunk && Consistent(slice);
+
+    /// <summary>
+    /// The last slice's run was stopped once it had encoded everything (a worker became available just as the server's run
+    /// ended): its chunks reach past the last frame, so the source's nearest frame to their end is that last frame, one
+    /// frame before them. Resuming there would encode it again and the assembled video would hold it twice (seen on the
+    /// bench, 16784 frames for 16783 and two packets at the same time). A listing shift is at most half a frame, so three
+    /// quarters of a frame tells them apart; only within a second of the file's end, as a hole in the video looks the same.
+    /// </summary>
+    public bool ResumePastLastFrame(EncodeSlice slice, double listed, double frame)
+    {
+        if (!slice.Last || Source is not { } source || listed < source.DurationSeconds - 1)
+            return false;
+        double threshold = slice.SeekMargin > EmbyConversionPlanner.FrameMargin ? slice.SeekMargin * 1.5 : MaxStartShift;
+        return listed - frame > threshold;
+    }
 
     /// <summary>Chunks of the slice from its first one without gap: where its next run resumes.</summary>
     public int ContiguousChunks(EncodeSlice slice)
@@ -341,13 +392,17 @@ public sealed class EncodeTask
     /// the previous one ended (its first chunk starts at the run's start), so this holds across runs too. The slice's
     /// last chunk lasts up to the slice's end when its listed end is within a listing shift of it
     /// (<see cref="ListingTolerance"/>): each slice then lasts exactly its length, whatever time base its run listed in.
-    /// Further off is left as listed: missing frames must show in the check. Call under the lock.
+    /// Further off is left as listed: missing frames must show in the check. The last slice has no end frame to align on,
+    /// so a listing shift stayed in the length of a run's first chunk (54 ms between two frames at 25 fps and the rest of
+    /// the slice 14 ms late, seen on 2026-11-02): with Emby's -r its chunks hold whole frames, so their lengths are rounded
+    /// to whole frames, within the same tolerance. Call under the lock.
     /// </summary>
     public List<(int Index, double Duration)> ConcatDurations(EncodeSlice slice)
     {
         int n = ContiguousChunks(slice);
         var chunks = Chunks.Where(c => c.Index >= slice.FirstChunk && c.Index < slice.FirstChunk + n).OrderBy(c => c.Index).ToList();
         var durations = new List<(int, double)>(chunks.Count);
+        double? frameTime = OutputFrameTime();
         for (int i = 0; i < chunks.Count; i++)
         {
             var c = chunks[i];
@@ -359,7 +414,14 @@ public sealed class EncodeTask
             }
             else if (!slice.Last && Math.Abs(slice.End - c.End) <= ListingTolerance(slice))
                 end = slice.End;
-            durations.Add((c.Index, end - c.Start));
+            double duration = end - c.Start;
+            if (slice.Last && i + 1 < chunks.Count && frameTime is > 0 and var ft)
+            {
+                double whole = Math.Round(duration / ft) * ft;
+                if (whole > 0 && Math.Abs(whole - duration) <= ListingTolerance(slice))
+                    duration = whole;
+            }
+            durations.Add((c.Index, duration));
         }
         return durations;
     }
@@ -628,6 +690,8 @@ public sealed partial class EncodeQueue : IJobOwner
         {
             Index = i,
             SeekMargin = seekMargin,
+            // The bench sets its own margin to provoke a skipped frame: nothing must correct it then.
+            ServerFileStart = options.EncodeSeekMarginSeconds is null ? b.FileStart : null,
             Start = b.Time,
             End = i + 1 < bounds.Count ? bounds[i + 1].Time : duration,
             Last = i + 1 == bounds.Count,
@@ -1120,6 +1184,12 @@ public sealed partial class EncodeQueue : IJobOwner
         {
             slice.ResumeListed = listed;
             slice.ResumeFrame = frame;
+            if (frame is { } past && task.ResumePastLastFrame(slice, listed, past) && task.IsActive && !slice.Done && !slice.IsRunning)
+            {
+                MarkVideoEnd(task, slice, ServerKind);
+                Wake();
+                return null;
+            }
         }
         if (frame is { } found && found != listed)
             logger.LogInformation("Conversion {Id} slice {Slice}: resuming at the source frame {Frame:0.######}s (listed {Listed:0.######}s)",
@@ -1146,6 +1216,7 @@ public sealed partial class EncodeQueue : IJobOwner
         {
             Slice = new SliceInfo(Path.GetFileNameWithoutExtension(task.Input), slice.Index + 1, task.Slices.Count, slice.Start,
                 end ?? slice.End),
+            ServerFileStart = slice.ServerFileStart,
         };
     }
 
@@ -2053,6 +2124,8 @@ public sealed partial class EncodeQueue : IJobOwner
             slice.Speed = 0;
             if (ended.InputStart is { } inputStart)
                 task.DiagnosticsLog.FileStarts.TryAdd(MachineKind(task, job.Worker), inputStart);
+            if (ended.SeekCorrection is { } correction)
+                task.ShiftRun(slice, correction);
             bool covers = ended.ExitCode == 0 && task.Covers(slice);
             slice.IdleRuns = !covers && ended.Error is null && task.DropIdleRun(slice) ? slice.IdleRuns + 1 : 0;
             if (covers)

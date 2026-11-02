@@ -94,7 +94,7 @@ public class ConversionTests
         foreach (string video in new[] { "-vf", "-vtag", "-crf:v:0", "-map_metadata" })
             Assert.DoesNotContain(video, p);
         Assert.Single(p, x => x == "mp4");   // the prepared file's own format, not Emby's output options
-        Assert.Equal(["-avoid_negative_ts", "disabled", "-output_ts_offset", "10", "-f", "mp4", AudioAheadPlan.AudioPlaceholder], p[^7..]);
+        Assert.Equal(["-avoid_negative_ts", "disabled", "-output_ts_offset", "10", "-movie_timescale", AudioAheadPlan.MovieTimescale, "-f", "mp4", AudioAheadPlan.AudioPlaceholder], p[^9..]);
 
         // Assembly: the usual one, the converted audio copied from input 2, put back in place by -itsoffset.
         string[] a = ahead.AssemblyTemplate;

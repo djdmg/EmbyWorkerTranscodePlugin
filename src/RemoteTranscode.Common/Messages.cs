@@ -118,8 +118,13 @@ public sealed record ByteRange(long Offset, long Length);
 /// Conversions: where in the input (file 0) the slice this worker is expected to take next lies. The worker fetches it
 /// into its local cache while this job runs, so the next run starts without waiting for the network. Only a hint.
 /// </param>
+/// <remarks>
+/// <paramref name="ServerFileStart"/>: conversions, the file's start as the server's ffmpeg reads it. The -ss in
+/// <paramref name="Args"/> counts from that start; a worker whose ffmpeg reads another start moves -ss by the difference
+/// (see <see cref="EmbyConversionPlanner.ShiftSeek"/>) and says so in <see cref="JobEnded"/>. Ignored by workers before 0.7.19.
+/// </remarks>
 public sealed record JobOffer(string JobId, JobKind Kind, string[] Args, JobFile[] Files, double SegmentSeconds, int StartIndex, string JobToken,
-    ByteRange[]? Prefetch = null, SliceInfo? Slice = null) : Message;
+    ByteRange[]? Prefetch = null, SliceInfo? Slice = null, double? ServerFileStart = null) : Message;
 
 /// <summary>
 /// What a conversion job is, for the worker's window: the file, which slice of how many, and where the slice lies in
@@ -141,7 +146,7 @@ public sealed record JobAnswer(string JobId, bool Accepted, string? Reason) : Me
 public sealed record JobProgress(string JobId, long Frame, double Fps, double TimeSeconds, double Speed) : Message;
 
 /// <param name="InputStart">The input's start as this run's ffmpeg read it ("Input #0 ... start:"), a number only; null from older workers.</param>
-public sealed record JobEnded(string JobId, int ExitCode, string? Error, double? InputStart = null) : Message;
+public sealed record JobEnded(string JobId, int ExitCode, string? Error, double? InputStart = null, double? SeekCorrection = null) : Message;
 
 public sealed record CancelJob(string JobId, string Reason) : Message;
 

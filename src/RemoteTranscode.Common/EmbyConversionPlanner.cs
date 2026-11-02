@@ -46,6 +46,14 @@ public sealed record AudioAheadPlan(string[] PrepareTemplate, string[] AssemblyT
     public const int TimeShift = 10;
 
     /// <summary>
+    /// Movie time scale of the prepared file. MP4 writes the time shift as an edit in this scale, 1000 by default: rounded to the
+    /// millisecond, the AAC start of -21.333 ms read as -22 ms and all the audio came out 0.667 ms early. This value divides
+    /// exactly by the usual sample rates (44.1 and 48 kHz and their multiples): measured with Emby's ffmpeg 5.1, packets at the
+    /// same times as the classic conversion, 0.000000 s apart (2026-11-02).
+    /// </summary>
+    public const string MovieTimescale = "28224000";
+
+    /// <summary>
     /// The -itsoffset that gives the prepared file's packets their original times in the assembly. ffmpeg offsets an
     /// input by itsoffset minus its start time (-start_at_zero, or no -copyts), or by itsoffset alone (-copyts only):
     /// either way the result must be -<see cref="TimeShift"/> s, exactly. <paramref name="preparedStartMicros"/> is
@@ -385,7 +393,8 @@ public static class EmbyConversionPlanner
         run.AddRange(["-i", args[iIndex + 1]]);
         run.AddRange(prepare);
         run.AddRange(["-vn", "-map_chapters", "-1", "-avoid_negative_ts", "disabled",
-            "-output_ts_offset", AudioAheadPlan.TimeShift.ToString(CultureInfo.InvariantCulture), "-f", "mp4", AudioAheadPlan.AudioPlaceholder]);
+            "-output_ts_offset", AudioAheadPlan.TimeShift.ToString(CultureInfo.InvariantCulture),
+            "-movie_timescale", AudioAheadPlan.MovieTimescale, "-f", "mp4", AudioAheadPlan.AudioPlaceholder]);
 
         // ---- Assembly: the usual one, AAC streams copied from the prepared file (input 2) ----
         var final = new List<string>();
@@ -491,6 +500,34 @@ public static class EmbyConversionPlanner
         args.InsertRange(args.IndexOf("-i"), input);
         args.InsertRange(args.Count - 1, ["-segment_start_number", index.ToString(CultureInfo.InvariantCulture)]);
         return args.ToArray();
+    }
+
+    /// <summary>
+    /// How much a worker's -ss must move, given the file's start as its ffmpeg and as the server's read it; 0 when they
+    /// agree. Under -copyts -start_at_zero, ffmpeg keeps the frames whose time minus the file's start reaches -ss, and two
+    /// builds may read different starts: Emby's 5.1 read 0 on a file where the workers' 9.0 read 0.021 s, more than half a
+    /// frame at 25 fps, so the seek margin (<see cref="SeekMargin"/>) was not enough: every worker slice began one frame
+    /// late, with a repeated or skipped frame where it met a server slice, and a last slice on a worker lost its last
+    /// frame (seen on 2026-11-02). A difference over a few seconds is not this: left alone, the check of the file decides.
+    /// </summary>
+    public static double SeekCorrection(double serverStart, double ownStart)
+    {
+        double difference = ownStart - serverStart;
+        return Math.Abs(difference) is >= 0.0005 and <= 5 ? difference : 0;
+    }
+
+    /// <summary>The arguments with the input -ss moved down by <paramref name="correction"/> (never below 0).</summary>
+    public static string[] ShiftSeek(IReadOnlyList<string> args, double correction)
+    {
+        var shifted = args.ToArray();
+        int input = Array.IndexOf(shifted, "-i");
+        for (int i = 0; i + 1 < input; i++)
+            if (shifted[i] == "-ss" && double.TryParse(shifted[i + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out double ss))
+            {
+                shifted[i + 1] = Time(Math.Max(0, ss - correction));
+                break;
+            }
+        return shifted;
     }
 
     // Microseconds: the precision ffprobe prints timestamps with.

@@ -29,6 +29,9 @@ public sealed record JobPlan(
     /// <summary>Conversions: the input range the worker should fetch ahead for its next slice (see <see cref="JobOffer.Prefetch"/>).</summary>
     public ByteRange[]? Prefetch { get; init; }
 
+    /// <summary>Conversions: the file's start as the server's ffmpeg reads it (see <see cref="JobOffer"/>).</summary>
+    public double? ServerFileStart { get; init; }
+
     /// <summary>Conversions: the slice this run encodes, shown in the worker's window (see <see cref="JobOffer.Slice"/>).</summary>
     public SliceInfo? Slice { get; init; }
 }

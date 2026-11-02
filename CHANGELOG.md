@@ -8,6 +8,24 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.34 and worker 0.7.19 — 2026-11-02
+
+Built and published by GitHub Actions (release v0.7.34).
+
+### Fixed
+
+- **Plugin and worker** — When the server's ffmpeg and a worker's read a file's start more than the seek margin apart (0 and 0.021 s at 25 fps, margin 20 ms), every worker slice began one frame late, with a repeated or skipped frame where it met a server slice, and a last slice on a worker lost its last frame. The conversion check accepted these files. The coordinator now sends the start it reads (`ServerFileStart`), and the worker moves its `-ss` by the difference and reports it (`SeekCorrection`), so the chunk times go back to the server's. Older workers ignore it and behave as before. Bench test T27: 7499 frames of 7500 without the correction, 7500 with it.
+- **Plugin** — `EncodeAudioAhead`: the prepared MP4 wrote its time shift in the default movie time scale (1000), rounded to the millisecond, so all the audio came out 0.667 ms early. It now uses `-movie_timescale 28224000`. Measured with Emby's ffmpeg 5.1 on 3 minutes of audio: 0.000000 s from the classic conversion, packets of the same sizes.
+- **Plugin** — A last slice whose run was stopped once everything was encoded (a worker becoming available just as the server's run ended) was resumed on its last frame, which the assembled video then held twice. The slice is now done there.
+- **Plugin** — Last slice: chunk lengths are rounded to whole frames when Emby's command sets the frame rate (`-r`). A listing shift used to stay in the length of a run's first chunk (54 ms between two frames at 25 fps, the rest of the slice 14 ms late).
+
+### Bench
+
+- T27: file start read 21 ms apart at 25 fps, without and with the correction.
+- T28: `EncodeAudioAhead` against the classic assembly on 10 kinds of files (AC-3, E-AC-3, DTS, FLAC, Opus, MP3, two tracks at 48 and 44.1 kHz, HEVC 10 bits, audio starting 0.5 s late, MPEG-TS, 23.976 to 29.97 fps). No packet differs. MPEG-TS sources stay on the classic assembly, by design.
+
+`EncodeAudioAhead` stays off by default.
+
 ## Plugin 0.7.33 — 2026-11-02
 
 Built and published by GitHub Actions (release v0.7.33). Worker unchanged (0.7.18).

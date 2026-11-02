@@ -147,7 +147,7 @@ public sealed class ServerMedia(CoordinatorOptions options)
     /// like ffmpeg's -ss), and where in the file a run starting there begins reading (the keyframe it decodes from) and
     /// a run ending there stops (that frame). Positions are null when ffprobe did not report them.
     /// </summary>
-    public sealed record Boundary(double Time, long? KeyframePosition, long? Position, double? SmallestFrameGap = null);
+    public sealed record Boundary(double Time, long? KeyframePosition, long? Position, double? SmallestFrameGap = null, double FileStart = 0);
 
     /// <summary>
     /// For each time, its <see cref="Boundary"/> (null where no frame was read). One ffprobe pass that reads packets
@@ -161,7 +161,8 @@ public sealed class ServerMedia(CoordinatorOptions options)
             return result;
         // A video without presentation times on its packets (AVI with packed B-frames, placeholder frames): runs
         // seeking into it do not meet at the same frame, so it is not cut at all (no boundary: one slice).
-        if (await FramesAroundAsync(path, times, token) is not { } frames)
+        double fileStart = 0;
+        if (await FramesAroundAsync(path, times, token, s => fileStart = s) is not { } frames)
             return result;
         // For each time, the smallest presentation time at or after it. A window always contains that frame (and the
         // keyframe before it), so it is the true next frame.
@@ -177,7 +178,7 @@ public sealed class ServerMedia(CoordinatorOptions options)
             if (k >= frames.Count || !(times[i] <= 0 || frames[k].Time < times[i] + 5))
                 continue;
             long? keyframe = frames.Take(k + 1).LastOrDefault(f => f.Key).Position;
-            result[i] = new Boundary(frames[k].Time, keyframe, frames[k].Position, smallestGap);
+            result[i] = new Boundary(frames[k].Time, keyframe, frames[k].Position, smallestGap, fileStart);
         }
         return result;
     }
@@ -212,7 +213,7 @@ public sealed class ServerMedia(CoordinatorOptions options)
     /// presentation order. One ffprobe pass that reads packets only (no decoding). Null when ffprobe fails or a packet
     /// has no presentation time.
     /// </summary>
-    private async Task<List<(double Time, long? Position, bool Key)>?> FramesAroundAsync(string path, IReadOnlyList<double> times, CancellationToken token)
+    private async Task<List<(double Time, long? Position, bool Key)>?> FramesAroundAsync(string path, IReadOnlyList<double> times, CancellationToken token, Action<double>? onFileStart = null)
     {
         static string F(double v) => v.ToString("0.######", CultureInfo.InvariantCulture);
         // "V": video but not cover art. Each interval seeks to the keyframe before its start and reads past the time;
@@ -229,6 +230,7 @@ public sealed class ServerMedia(CoordinatorOptions options)
         if (doc.RootElement.TryGetProperty("format", out var format) && format.TryGetProperty("start_time", out var st)
             && double.TryParse(st.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double s))
             start = s;
+        onFileStart?.Invoke(start);
         var frames = new List<(double Time, long? Position, bool Key)>();
         if (doc.RootElement.TryGetProperty("packets", out var packets))
             foreach (var p in packets.EnumerateArray())

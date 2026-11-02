@@ -26,6 +26,10 @@ public sealed class JobRunner
     private readonly Queue<string> stderrTail = new();
     // The input's start as ffmpeg read it, reported with JobEnded: another build of ffmpeg may read the same file differently.
     private double? inputStart;
+    // What this job moved its -ss by (EmbyConversionPlanner.SeekCorrection), reported with JobEnded; null if nothing.
+    private double? seekCorrection;
+    // The start this ffmpeg reads per input file: read once, each slice of a conversion would otherwise open the file again.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, double> OwnFileStarts = new();
     // Written once by RunAsync, read by Stop() from the WebSocket receive loop and the availability loop.
     private Process? process;
     // Set by Stop()/Cancel() from other threads (first reason wins, under stopGate); read by the upload loop to apply the
@@ -125,6 +129,69 @@ public sealed class JobRunner
     /// The UI reads the public progress properties concurrently; they are plain fields updated without locks
     /// (values are only displayed).
     /// </summary>
+    /// <summary>
+    /// A conversion run that seeks: compares the file's start as this ffmpeg reads it with the server's, and returns how
+    /// much -ss must move (null: nothing to do, or the start could not be read, in which case the job runs as offered).
+    /// ffmpeg with an input and no output prints the input's description and stops.
+    /// </summary>
+    private async Task<double?> SeekCorrectionAsync(IReadOnlyList<string> args, string? cacheKey)
+    {
+        if (offer.ServerFileStart is not { } serverStart)
+            return null;
+        int input = args.ToList().IndexOf("-i");
+        if (input < 0 || input + 1 >= args.Count || args.Take(input).All(a => a != "-ss"))
+            return null;
+        string key = cacheKey ?? args[input + 1];
+        if (!OwnFileStarts.TryGetValue(key, out double ownStart))
+        {
+            if (await ReadFileStartAsync(args.Take(input + 2).ToList()) is not { } read)
+            {
+                log($"job {offer.JobId}: file start not read, -ss left as offered");
+                return null;
+            }
+            OwnFileStarts[key] = ownStart = read;
+        }
+        double correction = EmbyConversionPlanner.SeekCorrection(serverStart, ownStart);
+        if (correction == 0)
+            return null;
+        log($"job {offer.JobId}: file start {ownStart:0.######} here, {serverStart:0.######} on the server: -ss moved by {-correction:0.######}");
+        return correction;
+    }
+
+    private async Task<double?> ReadFileStartAsync(IReadOnlyList<string> inputArgs)
+    {
+        var psi = new ProcessStartInfo(config.ResolvedFfmpegPath ?? config.FfmpegPath)
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            WorkingDirectory = jobDir,
+        };
+        foreach (string a in inputArgs)
+            psi.ArgumentList.Add(a);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(60));
+        using var probe = Process.Start(psi)!;
+        ChildProcessGuard.Attach(probe);
+        probe.StandardInput.Close();
+        var stdout = probe.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        double? start = null;
+        try
+        {
+            while (await probe.StandardError.ReadLineAsync(timeout.Token) is { } line)
+                start ??= FfmpegLog.InputStart(line);
+            await probe.WaitForExitAsync(timeout.Token);
+            await stdout;
+        }
+        catch (OperationCanceledException)
+        {
+            try { probe.Kill(entireProcessTree: true); } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        }
+        return start;
+    }
+
     public async Task RunAsync()
     {
         int exitCode = -1;
@@ -155,9 +222,11 @@ public sealed class JobRunner
             bool softwareDecoding = false;
             // Likewise for GPU tone mapping chosen by this worker (playback only: a conversion's graph is the coordinator's).
             bool cpuToneMapping = false;
+            string[] jobArgs = offer.Args;
+            bool seekChecked = false;
             while (true)
             {
-                var command = WorkerCommandBuilder.Build(offer.Args, new WorkerCommandContext
+                var commandContext = new WorkerCommandContext
                 {
                     CoordinatorBaseUrl = config.CoordinatorUrl!,
                     JobId = offer.JobId,
@@ -176,7 +245,18 @@ public sealed class JobRunner
                         ? capabilities.HwDecoders.Where(d => SuspendedDecoders.GetValueOrDefault(d) < SuspendAfterFailures).ToArray()
                         : [],
                     GpuToneMapping = cpuToneMapping || GpuToneMappingSuspended ? null : capabilities.GpuToneMapping,
-                });
+                };
+                var command = WorkerCommandBuilder.Build(jobArgs, commandContext);
+                if (!seekChecked)
+                {
+                    seekChecked = true;
+                    if (await SeekCorrectionAsync(command.Args, cacheKey) is { } correction)
+                    {
+                        seekCorrection = correction;
+                        jobArgs = EmbyConversionPlanner.ShiftSeek(jobArgs, correction);
+                        command = WorkerCommandBuilder.Build(jobArgs, commandContext);
+                    }
+                }
                 Encoder = command.VideoEncoder;
                 log($"job {offer.JobId}: start at segment {offer.StartIndex}, encoder {command.VideoEncoder}, decoding {command.HardwareDecoder ?? "software"}" +
                     (command.GpuToneMapped ? ", tone mapping GPU" : ""));
@@ -285,7 +365,7 @@ public sealed class JobRunner
             }
             try
             {
-                await send(new JobEnded(offer.JobId, exitCode, error, inputStart));
+                await send(new JobEnded(offer.JobId, exitCode, error, inputStart, seekCorrection));
                 log($"job {offer.JobId}: ended (exit {exitCode}{(error is null ? "" : ", " + error)}), {SegmentsUploaded} segments uploaded");
             }
             catch (Exception ex)
