@@ -32,7 +32,7 @@ public class FailureDiagnosticsTests : IDisposable
               "r_frame_rate": "24000/1001", "avg_frame_rate": "24000/1001", "time_base": "1/1000", "start_time": "0.005000",
               "disposition": { "attached_pic": 0 }, "tags": { "title": "Piste Secrete Rebecca", "language": "fre", "BPS": "1234" } },
             { "index": 1, "codec_name": "eac3", "codec_type": "audio", "sample_rate": "48000", "channels": 6, "channel_layout": "5.1(side)", "time_base": "1/1000", "start_time": "0.005000",
-              "r_frame_rate": "0/0", "avg_frame_rate": "0/0", "disposition": { "attached_pic": 0 }, "tags": { "title": "Commentaire de Dimitri", "handler_name": "/volume1/secret/handler" } },
+              "r_frame_rate": "0/0", "avg_frame_rate": "0/0", "disposition": { "attached_pic": 0 }, "tags": { "title": "Commentaire de SomeUser", "handler_name": "/volume1/secret/handler" } },
             { "index": 2, "codec_name": "subrip", "codec_type": "subtitle", "time_base": "1/1000", "start_time": "0.000000", "tags": { "title": "Sous-titres Secret" } }
           ],
           "chapters": [
@@ -46,7 +46,7 @@ public class FailureDiagnosticsTests : IDisposable
 
     private static readonly string[] SecretWords =
     [
-        "Rebecca", "Adler", "House", "S01E01", "volume1", "Secret", "SECRET", "Commentaire", "Dimitri", "Chapitre", "Sous-titres", "192.0.2.10", "nas.local", "Séries", "handler",
+        "Rebecca", "Adler", "House", "S01E01", "volume1", "Secret", "SECRET", "Commentaire", "SomeUser", "Chapitre", "Sous-titres", "192.0.2.10", "nas.local", "Séries", "handler",
     ];
 
     private static string Pts(double v) => v.ToString("0.000000", CultureInfo.InvariantCulture);
@@ -749,7 +749,7 @@ public class FailureDiagnosticsTests : IDisposable
     [Theory]
     [InlineData("a/b")]
     [InlineData("/volume1/x")]
-    [InlineData("Le film de Dimitri, très long, avec des accents é")]
+    [InlineData("Le film de SomeUser, très long, avec des accents é")]
     [InlineData("it's")]
     [InlineData("x\ny")]
     public void TokensRefuseAnythingButCodecWords(string value) => Assert.Null(DiagnosticsAnalysis.Token(value));
@@ -862,7 +862,7 @@ public class FailureDiagnosticsTests : IDisposable
         File.WriteAllText(Path.Combine(spool, "chapters.txt"), ";FFMETADATA1\ntitle=Dr House Rebecca\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=Chapitre Rebecca\n");
         await Run(ffmpeg,
             "-y -hide_banner -t 6 -f lavfi -i testsrc2=size=320x160:rate=24000/1001 -t 8 -f lavfi -i anullsrc=r=48000:cl=stereo -i chapters.txt " +
-            "-map 0:v -map 1:a -map_metadata 2 -map_chapters 2 -c:v libx264 -preset ultrafast -g 24 -keyint_min 24 -sc_threshold 0 -bf 2 -c:a aac -metadata:s:a:0 title=Commentaire_Dimitri -output_ts_offset 0.005 source.mkv", spool);
+            "-map 0:v -map 1:a -map_metadata 2 -map_chapters 2 -c:v libx264 -preset ultrafast -g 24 -keyint_min 24 -sc_threshold 0 -bf 2 -c:a aac -metadata:s:a:0 title=Commentaire_SomeUser -output_ts_offset 0.005 source.mkv", spool);
         string source = Path.Combine(spool, "source.mkv");
         var request = new DiagnosticsRequest { Kind = FailureKind.GivenBack, Error = "échec", SourcePath = source, SpoolId = "x" };
         var d = await new FailureDiagnostics(Real(ffprobe), Real(ffmpeg)).CollectAsync(request, default);

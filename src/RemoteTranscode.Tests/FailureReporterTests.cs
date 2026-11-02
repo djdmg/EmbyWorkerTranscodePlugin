@@ -34,7 +34,7 @@ public class FailureReporterTests : IDisposable
             "[matroska,webm @ 000001d2c3b4a590] Read error at pos. 1234567",
             $"Error opening input file {Input}.",
             @"C:\Users\SomeUser\AppData\Local\EmbyRemoteWorker\cache\Dr House - S01E01.mkv: Invalid data found",
-            "contact dimitri@example.fr on nas.local or fe80::1c2b:3a4d:5e6f:7081",
+            "contact someuser@example.fr on nas.local or fe80::1c2b:3a4d:5e6f:7081",
         ],
         FailedWorker = FailureReportFormatter.DescribeWorker("0.7.14", ["NVIDIA GeForce RTX 4080"], ["libx264", "h264_nvenc", "hevc_nvenc"], "libx264"),
         PluginVersion = "0.7.24",
@@ -56,7 +56,7 @@ public class FailureReporterTests : IDisposable
     private static readonly string[] Forbidden =
     [
         "volume1", "Séries", "House", "Saison", "Symptômes", "Rebecca", "Adler", "S01E01", "sync", "7f3c2a9b1d4e4f6a8b0c1d2e3f4a5b6c",
-        "Users", "SomeUser", "AppData", "EmbyRemoteWorker", "GAMING-PC", "192.168.1.42", "emby.example.org", "example.org", "dimitri@",
+        "Users", "SomeUser", "AppData", "EmbyRemoteWorker", "GAMING-PC", "192.168.1.42", "emby.example.org", "example.org", "someuser@",
         "nas.local", "fe80", ".mkv", ".mp4", "3f9a1c2e5b7d4e6f8a9b0c1d2e3f4a5b",
     ];
 
