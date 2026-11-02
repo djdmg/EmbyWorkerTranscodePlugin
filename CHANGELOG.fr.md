@@ -6,6 +6,22 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.35 — 02/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.35). Worker inchangé (0.7.19).
+
+### Corrigé
+
+- **Plugin** — Une vidéo commençant après le début du fichier sortait d'autant en avance sur son audio, de la première à la dernière image : le démultiplexeur concat fait démarrer les morceaux à 0. Mesuré sur de vrais fichiers : 79 ms et 21 ms. L'assemblage remet désormais la vidéo à sa place avec `-itsoffset` sur la liste des morceaux.
+
+### Ajouté
+
+- **Plugin** — Le contrôle d'une conversion compare aussi l'endroit où la vidéo commence par rapport au début du fichier, à une demi-image près (5 ms au moins). Un résultat décalé par rapport à son audio est rejeté et converti sur le serveur. Non contrôlé sur les sources sans temps de présentation exacts (certains AVI).
+
+### Banc
+
+- T29 : vidéo commençant 79 ms après l'audio.
+
 ## Plugin 0.7.34 et worker 0.7.19 — 02/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.34).

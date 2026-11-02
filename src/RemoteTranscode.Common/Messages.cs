@@ -202,8 +202,10 @@ public sealed record WorkerLost(string JobId, string Reason) : Message;
 /// All video chunks are encoded: the shim assembles Emby's output from this concat list. With
 /// <paramref name="AudioFile"/>, the audio was converted ahead on the server (see <see cref="AudioAheadPlan"/>) and
 /// <paramref name="AudioOffset"/> is the -itsoffset that puts it back in place; without, the usual assembly.
+/// <paramref name="VideoOffset"/>: where the source's video starts, when not at the start of the file (see
+/// <see cref="EmbyConversionPlanner.WithVideoOffset"/>).
 /// </summary>
-public sealed record ConversionReady(string TaskId, string ListFile, string? AudioFile = null, string? AudioOffset = null) : Message;
+public sealed record ConversionReady(string TaskId, string ListFile, string? AudioFile = null, string? AudioOffset = null, string? VideoOffset = null) : Message;
 
 /// <summary>The remote encode gave up: the shim runs Emby's original command on the server.</summary>
 public sealed record ConversionFailed(string TaskId, string Reason) : Message;

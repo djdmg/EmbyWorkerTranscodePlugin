@@ -888,6 +888,34 @@ function New-T28Source([hashtable]$c) {
     $dst
 }
 
+# Vidéo qui commence 0,079 s après l'audio, début de fichier à 0 : l'écart audio-vidéo de la sortie doit rester celui de la
+# source. Mesuré sur le premier paquet affiché de chaque flux ; l'amorce de 1024 échantillons de l'AAC est masquée à la lecture.
+#   pwsh -File run-tests.ps1 -Only T29
+function First-Pts([string]$file, [string]$stream) {
+    $v = @(& $Paths.ServerFfprobe -v error -select_streams $stream -read_intervals '%+#60' -show_entries packet=pts_time -of csv=p=0 $file) |
+        ForEach-Object { "$_".Split(',')[0] } | Where-Object { $_ -and $_ -ne 'N/A' } | ForEach-Object { [double]::Parse($_, [cultureinfo]::InvariantCulture) } | Measure-Object -Minimum
+    $v.Minimum
+}
+
+function T29 {
+    $src = Join-Path $Paths.Media 'film_video_79ms.mkv'
+    if (-not (Test-Path $src)) {
+        $base = New-T28Source @{ Id = 'late_base'; Ext = 'mkv'; Rate = '25'; Video = @('-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-g', '48'); Audio = @(@{ Hz = 48000; Layout = 'stereo'; Codec = 'ac3'; Options = @('-b:a', '192k') }) }
+        & $Paths.ServerFfmpeg -hide_banner -v error -y -itsoffset 0.079 -i $base -i $base -map 0:v -map 1:a -c copy $src
+        if ($LASTEXITCODE) { throw 'génération de la source en échec' }
+    }
+    Ensure-Workers @('w1', 'w2')
+    $out = Join-Path $Paths.Out 'conv-t29.mp4'
+    $s = Start-Shim (New-ConversionArgs -InputPath $src -OutputPath $out -Rate '25') 't29'
+    $code = Wait-Exit $s 1500
+    $sv = First-Pts $src 'v:0'; $sa = First-Pts $src 'a:0'
+    $ov = First-Pts $out 'v:0'; $oa = (First-Pts $out 'a:0') + 1024 / 48000
+    $gap = [math]::Abs(($oa - $ov) - ($sa - $sv)) * 1000
+    $ok = $code -eq 0 -and $gap -le 1
+    Add-Result 'T29' 'Vidéo commençant 79 ms après l''audio : écart audio-vidéo conservé' $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+        "source vidéo {0:0.000} audio {1:0.000} | sortie vidéo {2:0.000} audio {3:0.000} | différence {4:0.0} ms | code $code" -f $sv, $sa, $ov, $oa, $gap)
+}
+
 function T28 {
     Restart-BenchCoordinator @{ EncodeAudioAhead = $true } 'coordinator-before-t28'
     try { T28Core } finally { Restart-BenchCoordinator @{} 'coordinator-t28' }

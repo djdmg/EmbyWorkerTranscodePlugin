@@ -120,7 +120,7 @@ Versions are set in `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.EmbyPlugin.c
 
 | Item | Version |
 |---|---|
-| Plugin | 0.7.34 |
+| Plugin | 0.7.35 |
 | Worker and installer | 0.7.19, with icon, GPU decoding and GPU tone mapping (needs Resizable BAR on NVIDIA and AMD cards), logs kept 7 days (FFmpeg "full" build: installer of about 218 MB instead of 170 MB). Workers 0.7.7 to 0.7.14 remain compatible but tone map on the processor and never receive conversions tone mapped on the GPU (also: 0.7.9 only shows the Emby queue counter during a job, 0.7.7 and 0.7.8 do not show it, 0.7.7 lacks conversion progress) |
 | Emby Server tested | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 without GPU); Emby's ffmpeg 5.1 (fork) |
 | Client tested | Emby Web in Chrome (hls.js player 1.6.0-beta.2) |

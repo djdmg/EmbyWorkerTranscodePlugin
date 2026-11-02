@@ -254,6 +254,15 @@ public sealed class EncodeTask
         }
     }
 
+    /// <summary>
+    /// Where the source's first frame lies from the file's start (the first slice starts on it), for the assembly
+    /// (EmbyConversionPlanner.WithVideoOffset); null at the file's start. Microseconds, as ffprobe prints them.
+    /// </summary>
+    public string? AssemblyVideoOffset() =>
+        Slices.OrderBy(s => s.Index).FirstOrDefault()?.Start is >= 0.0005 and var start
+            ? start.ToString("0.000000", CultureInfo.InvariantCulture)
+            : null;
+
     /// <summary>Time of one output frame when Emby's command sets the frame rate (-r): chunks then hold whole frames. Null otherwise.</summary>
     public double? OutputFrameTime()
     {
@@ -1349,7 +1358,7 @@ public sealed partial class EncodeQueue : IJobOwner
         await File.WriteAllTextAsync(listFile, list.ToString());
         try
         {
-            await task.Shim!.SendAsync(new ConversionReady(task.Id, listFile, audioFile, audioOffset));
+            await task.Shim!.SendAsync(new ConversionReady(task.Id, listFile, audioFile, audioOffset, task.AssemblyVideoOffset()));
         }
         catch (Exception)
         {

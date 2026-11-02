@@ -110,7 +110,7 @@ public sealed class ConversionSession : IDisposable
         string listFile = ready.ListFile;
         if (ready.AudioFile != null && ready.AudioOffset != null && plan.AudioAhead != null && config.UseAudioAhead)
         {
-            string[] ahead = plan.AudioAhead.Assembly(ready.AudioFile, ready.AudioOffset)
+            string[] ahead = EmbyConversionPlanner.WithVideoOffset(plan.AudioAhead.Assembly(ready.AudioFile, ready.AudioOffset), ready.VideoOffset)
                 .Select(a => a == ConversionPlan.ListPlaceholder ? listFile : a).ToArray();
             err.Line("remote-transcode: vidéo encodée par les workers et audio converti à l'avance par le serveur, assemblage du fichier demandé par Emby (flux recopiés)");
             var first = await RunAssemblyAsync(ahead, plan, plan.AudioAhead.SourceStreams.Length);
@@ -127,7 +127,8 @@ public sealed class ConversionSession : IDisposable
         }
         else if (ready.AudioFile != null)
             err.Line("remote-transcode: audio converti à l'avance non utilisé (désactivé, ou commande non prise en charge)");
-        string[] assembly = plan.AssemblyTemplate.Select(a => a == ConversionPlan.ListPlaceholder ? listFile : a).ToArray();
+        string[] assembly = EmbyConversionPlanner.WithVideoOffset(plan.AssemblyTemplate, ready.VideoOffset)
+            .Select(a => a == ConversionPlan.ListPlaceholder ? listFile : a).ToArray();
         err.Line("remote-transcode: vidéo encodée par les workers, assemblage du fichier demandé par Emby");
         var (code, problem, quit, quitLate) = await RunAssemblyAsync(assembly, plan, null);
         if (quit)
@@ -184,7 +185,8 @@ public sealed class ConversionSession : IDisposable
                     // An end that cannot be read is never taken as a pass: the file is not handed to Emby unchecked.
                     problem = !sourceVideo.IsKnown || !resultVideo.IsKnown
                         ? $"vérification impossible : fin de la vidéo illisible ({(sourceVideo.IsKnown ? "résultat" : "source")})"
-                        : SourceInfo.VerifyVideoSpan(sourceVideo, resultVideo);
+                        : SourceInfo.VerifyVideoSpan(sourceVideo, resultVideo)
+                            ?? SourceInfo.VerifyVideoStart(sourceVideo, await FileStartAsync(plan.Input), resultVideo);
                 }
             }
             catch (Exception ex)
@@ -193,6 +195,15 @@ public sealed class ConversionSession : IDisposable
             }
         }
         return (code, problem, false, quitRequested || run.QuitReceived);
+    }
+
+    /// <summary>The file's start as Emby's ffprobe reads it; null when it gives none.</summary>
+    private async Task<double?> FileStartAsync(string path)
+    {
+        using var doc = JsonDocument.Parse(await RunProbeAsync(["-v", "error", "-show_entries", "format=start_time", "-print_format", "json", path]));
+        return doc.RootElement.TryGetProperty("format", out var format) && format.TryGetProperty("start_time", out var st) && TryNumber(st.GetString(), out double start)
+            ? start
+            : null;
     }
 
     /// <summary>Duration, video height and stream counts of a file, read with Emby's ffprobe.</summary>

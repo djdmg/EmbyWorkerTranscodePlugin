@@ -19,6 +19,22 @@ public sealed record SourceInfo(double DurationSeconds, int Width, int Height, s
     }
 
     /// <summary>
+    /// The result's video starts where the source's does from the file's start, within half a frame (5 ms at least):
+    /// otherwise it is out of step with its audio from the first frame to the last, which the length check cannot see.
+    /// Not checked when the source's times are approximate (AVI without presentation times) or unknown.
+    /// </summary>
+    public static string? VerifyVideoStart(VideoSpan source, double? sourceFileStart, VideoSpan result)
+    {
+        if (!source.IsKnown || !result.IsKnown || source.Approximate || sourceFileStart is not { } fileStart)
+            return null;
+        double frame = source.FrameSeconds > 0 ? source.FrameSeconds : result.FrameSeconds > 0 ? result.FrameSeconds : 0.04;
+        double expected = source.Start - fileStart;
+        return Math.Abs(result.Start - expected) > Math.Max(0.005, frame / 2)
+            ? $"vidéo commençant à {result.Start:0.000}s au lieu de {expected:0.000}s : décalée par rapport à l'audio"
+            : null;
+    }
+
+    /// <summary>
     /// The result's video lasts as long as the source's, within one and a half frames: a missing frame at the end, or
     /// a repeated one, fails. A source whose packets lack presentation times (AVI with packed B-frames) has its end
     /// known to a couple of frames only (its last decoded frame has no time): three frames there. Not checked (null)

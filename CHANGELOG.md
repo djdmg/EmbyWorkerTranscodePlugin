@@ -8,6 +8,22 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.35 — 2026-11-02
+
+Built and published by GitHub Actions (release v0.7.35). Worker unchanged (0.7.19).
+
+### Fixed
+
+- **Plugin** — A video starting after the file's start came out that much ahead of its audio, from the first frame to the last: the concat demuxer starts the chunks at 0. Measured on real files, 79 ms and 21 ms. The assembly now puts the video back in place with `-itsoffset` on the chunk list.
+
+### Added
+
+- **Plugin** — The check of a conversion also compares where the video starts from the file's start, within half a frame (5 ms at least). A result out of step with its audio is rejected and converted on the server. Not checked on sources without exact presentation times (some AVI files).
+
+### Bench
+
+- T29: video starting 79 ms after the audio.
+
 ## Plugin 0.7.34 and worker 0.7.19 — 2026-11-02
 
 Built and published by GitHub Actions (release v0.7.34).

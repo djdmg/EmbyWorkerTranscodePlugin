@@ -250,6 +250,27 @@ public class ConversionTests
         Assert.True(ArgTemplateValidator.Validate(run, out var error), error);
     }
 
+    [Theory]
+    [InlineData(0.079, 0.0, 0.079, 0.0167, true)]    // put back in place
+    [InlineData(0.079, 0.0, 0.0, 0.0167, false)]     // moved to 0: ahead of its audio
+    [InlineData(0.083, 0.083, 0.0, 0.04, true)]      // the whole file starts late: everything moves together
+    [InlineData(0.021, 0.0, 0.021, 0.04, true)]
+    [InlineData(0.021, 0.0, 0.0, 0.04, false)]
+    [InlineData(0.0, 0.0, 0.004, 0.0167, true)]      // within the tolerance
+    public void Video_start_check_sees_a_video_out_of_step(double sourceStart, double fileStart, double resultStart, double frame, bool passes)
+    {
+        var source = new VideoSpan(sourceStart, 100, frame);
+        var result = new VideoSpan(resultStart, 100, frame);
+        Assert.Equal(passes, SourceInfo.VerifyVideoStart(source, fileStart, result) is null);
+    }
+
+    [Fact]
+    public void Video_start_check_is_skipped_without_exact_times()
+    {
+        Assert.Null(SourceInfo.VerifyVideoStart(new VideoSpan(0.5, 100, 0.04, Approximate: true), 0, new VideoSpan(0, 100, 0.04)));
+        Assert.Null(SourceInfo.VerifyVideoStart(new VideoSpan(0.5, 100, 0.04), null, new VideoSpan(0, 100, 0.04)));
+    }
+
     [Fact]
     public void Video_span_check_counts_frames()
     {

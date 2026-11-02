@@ -503,6 +503,21 @@ public static class EmbyConversionPlanner
     }
 
     /// <summary>
+    /// The assembly with the video put back where it starts in the source. The concat demuxer starts the chunks at 0 whatever
+    /// their timestamps, so a video starting after the file's start came out that much ahead of its audio: 79 ms on a source
+    /// whose audio starts at 0 and video at 0.079 s, measured on 2026-11-02 against the source's scene changes, and 7 ms in
+    /// the bench's lip-sync test. Null: nothing to do.
+    /// </summary>
+    public static string[] WithVideoOffset(IReadOnlyList<string> assembly, string? offset)
+    {
+        var args = assembly.ToList();
+        int concat = args.IndexOf("concat");
+        if (offset != null && concat > 0 && args[concat - 1] == "-f")
+            args.InsertRange(concat - 1, ["-itsoffset", offset]);
+        return args.ToArray();
+    }
+
+    /// <summary>
     /// How much a worker's -ss must move, given the file's start as its ffmpeg and as the server's read it; 0 when they
     /// agree. Under -copyts -start_at_zero, ffmpeg keeps the frames whose time minus the file's start reaches -ss, and two
     /// builds may read different starts: Emby's 5.1 read 0 on a file where the workers' 9.0 read 0.021 s, more than half a

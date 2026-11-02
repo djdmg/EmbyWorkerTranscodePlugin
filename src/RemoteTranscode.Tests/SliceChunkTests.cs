@@ -117,6 +117,26 @@ public class SliceChunkTests
         Assert.Equal(expected, task.ResumePastLastFrame(slice, listed, frame));
     }
 
+    [Theory]
+    [InlineData(0.079, "0.079000")]
+    [InlineData(0.021, "0.021000")]
+    [InlineData(0, null)]
+    [InlineData(0.0001, null)]
+    public void Assembly_video_offset_is_where_the_first_slice_starts(double start, string? expected)
+    {
+        var task = Task(new EncodeSlice { Index = 0, Start = start, End = 120 }, new EncodeSlice { Index = 1, Start = 120, End = 240, Last = true });
+        Assert.Equal(expected, task.AssemblyVideoOffset());
+    }
+
+    [Fact]
+    public void Video_offset_goes_before_the_chunk_list_only()
+    {
+        string[] assembly = ["-copyts", "-f", "matroska,webm", "-i", "in.mkv", "-f", "concat", "-safe", "0", "-i", "{chunklist}", "-itsoffset", "-0.021333", "-i", "a.mp4", "out.mp4"];
+        Assert.Equal(["-copyts", "-f", "matroska,webm", "-i", "in.mkv", "-itsoffset", "0.079000", "-f", "concat", "-safe", "0", "-i", "{chunklist}", "-itsoffset", "-0.021333", "-i", "a.mp4", "out.mp4"],
+            EmbyConversionPlanner.WithVideoOffset(assembly, "0.079000"));
+        Assert.Equal(assembly, EmbyConversionPlanner.WithVideoOffset(assembly, null));
+    }
+
     [Fact]
     public void Source_time_listing_is_kept()
     {
