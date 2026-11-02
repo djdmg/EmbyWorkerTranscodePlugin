@@ -379,12 +379,14 @@ function New-ConversionArgs {
         [string]$InputPath, [string]$OutputPath, [string]$Encoder = 'libx264', [int[]]$AudioStreams = @(1),
         [string]$SubtitleFile, [switch]$Hdr, [int]$Width = 1280, [int]$Height = 720, [switch]$ForkOptions,
         # Décodeur imposé avant -i (« -c:v:0 h264 » d'Emby) ; 'none' : aucun, ffmpeg choisit (source AV1, T20).
-        [string]$InputCodec
+        [string]$InputCodec,
+        # Conteneur de la source et « -r » qu'Emby ajoute (T26).
+        [string]$InputFormat = 'matroska,webm', [string]$Rate
     )
     $a = [System.Collections.Generic.List[string]]::new()
     if ($ForkOptions) { $a.AddRange([string[]]@('-loglevel', '+timing')) }
     if (-not $InputCodec) { $InputCodec = if ($Hdr) { 'hevc' } else { 'h264' } }
-    $a.AddRange([string[]]@('-y', '-copyts', '-start_at_zero', '-f', 'matroska,webm'))
+    $a.AddRange([string[]]@('-y', '-copyts', '-start_at_zero', '-f', $InputFormat))
     if ($InputCodec -ne 'none') { $a.AddRange([string[]]@('-c:v:0', $InputCodec)) }
     $a.AddRange([string[]]@('-noautorotate', '-i', (U $InputPath)))
     if ($Hdr) {
@@ -398,6 +400,7 @@ function New-ConversionArgs {
     $a.Add('-sn')
     $a.AddRange([string[]]@('-c:v:0', $Encoder))
     if (-not $Hdr -and -not $SubtitleFile) { $a.AddRange([string[]]@('-vf', "scale=w=${Width}:h=${Height}")) }
+    if ($Rate) { $a.AddRange([string[]]@('-r:v:0', $Rate)) }
     $a.AddRange([string[]]@('-pix_fmt:v:0', 'yuv420p', '-maxrate:v:0', '4000000', '-bufsize:v:0', '8000000', '-preset:v:0', 'veryfast', '-crf:v:0', '23'))
     for ($i = 0; $i -lt $AudioStreams.Count; $i++) { $a.AddRange([string[]]@("-c:a:$i", 'aac', "-ab:a:$i", '160000', "-ac:a:$i", '2')) }
     $a.AddRange([string[]]@('-avoid_negative_ts', 'disabled', '-f', 'mp4', '-map_metadata', '-1', '-map_chapters', '-1', (U $OutputPath)))

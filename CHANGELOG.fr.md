@@ -6,6 +6,15 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.32 — 02/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.32). Worker inchangé (0.7.18).
+
+### Corrigé
+
+- **Plugin** — Conversions rejetées pour images manquantes alors qu'aucune image ne manquait (issue #4 : -12 images sur un MP4 dont le fichier commence à 0,062 s, à 23,976 images/s). Le `-r` d'Emby cale les temps listés sur sa propre grille, jusqu'à une demi-image des bornes des tranches : ici 20,3 ms, juste au-dessus des 20 ms fixes sous lesquels un décalage de liste était corrigé, et chaque tranche perdait 20,3 ms dans la liste d'assemblage. La tolérance suit désormais le fichier (un peu plus d'une demi-image, au moins 20 ms) ; une image entière manquante reste bien au-dessus et se voit toujours au contrôle. Présent depuis la 0.7.21. Test de banc T26 (source générée avec la recette du rapport) : échoue sans le correctif, 10070 images sur 10070 avec.
+- **Plugin** — Rapports d'échec : la recette signale que l'encodeur aac avance le début de l'audio de 1024 échantillons, ce qui avait masqué ce défaut au premier essai.
+
 ## Plugin 0.7.31 et worker 0.7.18 — 02/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.31).

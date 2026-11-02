@@ -76,14 +76,40 @@ public class SliceChunkTests
         Assert.True(task.Covers(slice));
     }
     // Emby's ffmpeg with -start_at_zero on a source whose video starts at 0.005 s: the run's times are 5 ms early.
-    private static (EncodeTask, EncodeSlice) ShiftedRun(double shift)
+    private static (EncodeTask, EncodeSlice) ShiftedRun(double shift, double seekMargin = EmbyConversionPlanner.FrameMargin)
     {
-        var slice = new EncodeSlice { Index = 1, Start = 118.118, End = 236.236, RunStartSeconds = 118.118, RunStartIndex = 100 };
+        var slice = new EncodeSlice { Index = 1, Start = 118.118, End = 236.236, RunStartSeconds = 118.118, RunStartIndex = 100, SeekMargin = seekMargin };
         var task = Task(slice);
         task.AddChunk(slice, 100, 118.118 - shift, 148.118 - shift, 1);
         task.AddChunk(slice, 101, 148.118 - shift, 178.118 - shift, 1);
         task.AddChunk(slice, 102, 178.118 - shift, 236.236 - shift, 1);
         return (task, slice);
+    }
+
+    // Issue #4: at 23.976 fps, half a frame (20.85 ms) is above the old fixed 20 ms, and a source starting at 0.062 s lists 20.3 ms early.
+    [Fact]
+    public void Shift_of_almost_half_a_frame_is_aligned_when_the_frame_gap_is_known()
+    {
+        var (task, slice) = ShiftedRun(0.0203, seekMargin: 0.020854);
+        task.AlignRunEnd(slice);
+        Assert.Equal(236.236, task.EncodedEnd(slice), 6);
+        Assert.Equal(118.118, task.ConcatDurations(slice).Sum(d => d.Duration), 6);
+    }
+
+    [Fact]
+    public void Missing_frame_is_never_aligned_whatever_the_frame_gap()
+    {
+        var (task, slice) = ShiftedRun(0.041708, seekMargin: 0.020854);
+        task.AlignRunEnd(slice);
+        Assert.Equal(236.236 - 0.041708, task.EncodedEnd(slice), 6);
+    }
+
+    [Fact]
+    public void Without_a_frame_gap_the_tolerance_stays_20_ms()
+    {
+        var (task, slice) = ShiftedRun(0.0203);
+        task.AlignRunEnd(slice);
+        Assert.Equal(236.236 - 0.0203, task.EncodedEnd(slice), 6);
     }
 
     [Fact]

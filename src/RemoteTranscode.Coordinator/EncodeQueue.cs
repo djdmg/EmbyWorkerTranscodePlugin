@@ -224,15 +224,23 @@ public sealed class EncodeTask
     /// the run's own start. Only differences well under a frame are a shift: a run missing frames must not be hidden
     /// by stretching its chunks (the assembled length would then look right). Call under the lock.
     /// </summary>
-    /// <summary>Largest listing shift corrected by <see cref="AlignRunEnd"/>: under half a frame at 24 fps.</summary>
+    /// <summary>Smallest tolerance for a listing shift (see <see cref="ListingTolerance"/>).</summary>
     public const double MaxStartShift = 0.02;
+
+    /// <summary>
+    /// Largest listing shift corrected by <see cref="AlignRunEnd"/> and <see cref="ConcatDurations"/>. Emby's -r puts listed
+    /// times on its own grid, so a shift can reach half a frame: 20.3 ms on a source starting at 0.062 s at 23.976 fps, just
+    /// over a fixed 20 ms, and 24 slices of 20.3 ms made the video 12 frames short (issue #4). A missing frame is a whole
+    /// frame, well above this. The slice's seek margin is half a frame when the frame gap is known.
+    /// </summary>
+    public static double ListingTolerance(EncodeSlice slice) => Math.Max(MaxStartShift, slice.SeekMargin * 1.1);
 
     public void AlignRunEnd(EncodeSlice slice)
     {
         if (slice.Last)
             return;
         double shift = slice.End - EncodedEnd(slice);
-        if (shift == 0 || Math.Abs(shift) > MaxStartShift)
+        if (shift == 0 || Math.Abs(shift) > ListingTolerance(slice))
             return;
         int last = slice.FirstChunk + ContiguousChunks(slice);
         for (int i = 0; i < Chunks.Count; i++)
@@ -332,7 +340,7 @@ public sealed class EncodeTask
     /// by a worker and the server, 12 to 14 frames long; its server slices had many small chunks). A new run starts where
     /// the previous one ended (its first chunk starts at the run's start), so this holds across runs too. The slice's
     /// last chunk lasts up to the slice's end when its listed end is within a listing shift of it
-    /// (<see cref="MaxStartShift"/>): each slice then lasts exactly its length, whatever time base its run listed in.
+    /// (<see cref="ListingTolerance"/>): each slice then lasts exactly its length, whatever time base its run listed in.
     /// Further off is left as listed: missing frames must show in the check. Call under the lock.
     /// </summary>
     public List<(int Index, double Duration)> ConcatDurations(EncodeSlice slice)
@@ -349,7 +357,7 @@ public sealed class EncodeTask
                 if (chunks[i + 1].Start > c.Start)
                     end = chunks[i + 1].Start;
             }
-            else if (!slice.Last && Math.Abs(slice.End - c.End) <= MaxStartShift)
+            else if (!slice.Last && Math.Abs(slice.End - c.End) <= ListingTolerance(slice))
                 end = slice.End;
             durations.Add((c.Index, end - c.Start));
         }

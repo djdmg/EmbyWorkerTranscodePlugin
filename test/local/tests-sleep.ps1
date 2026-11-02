@@ -793,3 +793,28 @@ function T25 {
     } finally { Restart-BenchCoordinator @{} 'coordinator-t25' }
     Ensure-Workers @('w1', 'w2')
 }
+
+# Source MP4 dont la vidéo commence à 0,124 s et l'audio à 0,062 s (issue #4, source générée avec la recette du rapport) :
+# l'encodeur AAC avance l'audio de 1024 échantillons, d'où -0,040667 ; le -r d'Emby cale les temps listés sur sa grille, 20,3 ms sous les bornes des tranches, un peu plus que l'ancienne tolérance
+# fixe de 20 ms. Attendu : chaque tranche dure sa longueur dans la liste d'assemblage, résultat à l'image près.
+#   pwsh -File run-tests.ps1 -Only T26
+function T26 {
+    $src = Join-Path $Paths.Media 'film_h264_start124.mp4'
+    if (-not (Test-Path $src)) {
+        & $Paths.ServerFfmpeg -y -hide_banner -v error -t 420 -f lavfi -i 'testsrc2=size=1280x720:rate=919025/38331' -itsoffset -0.040667 -t 420 -f lavfi -i 'anullsrc=r=48000:cl=stereo' -map 0:v -map 1:a -c:v libx264 -preset ultrafast -g 144 -keyint_min 144 -sc_threshold 0 -bf 2 -pix_fmt yuv420p -profile:v high -c:a:0 aac -output_ts_offset 0.124 $src
+        if ($LASTEXITCODE) { throw 'génération de la source en échec' }
+    }
+    Ensure-Workers @('w1', 'w2')
+    $srcV = Measure-Video $src
+    $out = Join-Path $Paths.Out 'conv-t26.mp4'
+    $s = Start-Shim (New-ConversionArgs -InputPath $src -OutputPath $out -InputFormat 'mov,mp4,m4a,3gp,3g2,mj2' -Rate '23.976024627685547') 't26'
+    $code = Wait-Exit $s 1800
+    $outV = if (Test-Path $out) { Measure-Video $out } else { $null }
+    $verify = Log-Excerpt 'shim-t26' 'source .*sultat|rejet' 1
+    $assembled = Log-Excerpt 'coordinator' 'assembled from chunks' 100 | Select-Object -Last 1
+    $e = Encode-Summary $out
+    $ok = $code -eq 0 -and $outV -and $outV.Frames -eq $srcV.Frames -and ($verify -join ' ') -notmatch 'rejet' -and (Prop $e 'Status') -eq 'Completed'
+    $oText = if ($outV) { '{0} images, {1:0.000}s' -f $outV.Frames, $outV.Duration } else { 'absente' }
+    Add-Result 'T26' 'Source MP4 à start_time 0,062/0,124 avec le -r d''Emby : à l''image près' $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+        "source : $($srcV.Frames) images, {0:0.000}s | sortie : $oText | contrôle : « $verify » | final : $(Prop $e 'Status'), workers $(Prop $e 'Worker') | « $assembled » | code $code" -f $srcV.Duration)
+}

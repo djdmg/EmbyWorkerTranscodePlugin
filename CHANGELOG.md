@@ -8,6 +8,15 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.32 — 2026-11-02
+
+Built and published by GitHub Actions (release v0.7.32). Worker unchanged (0.7.18).
+
+### Fixed
+
+- **Plugin** — Conversions rejected for missing frames although no frame was missing (issue #4: -12 frames on an MP4 whose file starts at 0.062 s, at 23.976 fps). Emby's `-r` puts the listed times on its own grid, up to half a frame from the slice boundaries: 20.3 ms here, just over the fixed 20 ms under which a listing shift was corrected, so each slice lost 20.3 ms in the concat list. The tolerance now follows the file (a little over half a frame, at least 20 ms); a whole missing frame stays well above it and still shows in the check. Present since 0.7.21. Bench test T26 (source generated from the report's recipe): fails without the fix, 10070/10070 frames with it.
+- **Plugin** — Failure reports: the recipe warns that the aac encoder moves the audio's start by 1024 samples, which had hidden this defect on the first try.
+
 ## Plugin 0.7.31 and worker 0.7.18 — 2026-11-02
 
 Built and published by GitHub Actions (release v0.7.31).

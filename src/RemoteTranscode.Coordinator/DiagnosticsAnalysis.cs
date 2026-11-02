@@ -920,6 +920,8 @@ public static class RecipeBuilder
             notes.Add($"the source's video ends {F(shorter)} s before its audio: kept in this command");
         if (length < duration)
             notes.Add($"length cut to {F(length)} s (the source lasts {F(duration)} s)");
+        if (source.Audio.Any(a => a.Codec == "aac"))
+            notes.Add("the aac encoder moves the audio's start 1024 samples earlier (21.3 ms at 48 kHz): compensate in -itsoffset when the file's start matters");
         if (source.Streams.Any(s => s.Cover))
             notes.Add("the source has cover art (attached picture): not reproduced");
         int subtitles = source.Streams.Count(s => s.Type == "subtitle");
