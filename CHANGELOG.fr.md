@@ -50,7 +50,7 @@ Construit et publié par GitHub Actions (release v0.7.29).
 
 ### Corrigé
 
-- **Installeur** — Une mise à jour lancée depuis une autre session Windows du même utilisateur (par exemple par SSH, en session 0, pendant que le worker tourne sur le bureau) ferme désormais le worker : les processus sont reconnus par leur propriétaire et leur dossier d'installation dans toutes les sessions, le worker écoute aussi un événement de sortie `Global\`, et ce qui tourne encore après 20 s est fermé. Depuis une session sans bureau, le worker est relancé dans la session de bureau de l'utilisateur par une tâche planifiée ponctuelle, ou à la prochaine ouverture de session si aucune n'est ouverte. Auparavant, la mise à jour échouait (« fichier utilisé »).
+- **Installeur** — Une mise à jour lancée depuis une autre session Windows du même utilisateur (par exemple par SSH, en session 0, pendant que le worker tourne sur le bureau) ferme désormais le worker : les processus sont reconnus par leur propriétaire et leur dossier d'installation dans toutes les sessions, le worker écoute aussi un événement de sortie `Global\`, et ce qui tourne encore après 20 s est fermé. Depuis une session sans bureau, le worker est relancé dans la session de bureau de l'utilisateur par une tâche planifiée ponctuelle, ou, si aucune n'est ouverte, à la prochaine ouverture de session quand le démarrage avec Windows est activé. Auparavant, la mise à jour échouait (« fichier utilisé »).
 
 ### Banc
 

@@ -52,7 +52,7 @@ Built and published by GitHub Actions (release v0.7.29).
 
 ### Fixed
 
-- **Installer** — An update started from another Windows session of the same user (for example over SSH, in session 0, while the worker runs on the desktop) now closes the worker: processes are matched by owner and install folder in any session, the worker also listens to a `Global\` exit event, and anything still running after 20 s is closed. From a session without a desktop, the worker is relaunched in the user's desktop session through a one-shot scheduled task, or at the next logon if no desktop session is open. Before, the update failed with "file in use".
+- **Installer** — An update started from another Windows session of the same user (for example over SSH, in session 0, while the worker runs on the desktop) now closes the worker: processes are matched by owner and install folder in any session, the worker also listens to a `Global\` exit event, and anything still running after 20 s is closed. From a session without a desktop, the worker is relaunched in the user's desktop session through a one-shot scheduled task, or, if no desktop session is open, at the next logon when it starts with Windows. Before, the update failed with "file in use".
 
 ### Bench
 
