@@ -6,11 +6,22 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
-## Non publié
+## Plugin 0.7.31 et worker 0.7.18 — 02/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.31).
 
 ### Corrigé
 
+- **Plugin** — Conversions rejetées pour quelques images en trop (+3 à +22) sur les sources dont la vidéo commence quelques millisecondes après 0 (issue #3). Pour le même fichier, le ffmpeg 5.1 d'Emby lit un début de fichier à 0 et le ffmpeg 9 des workers à 0,005 s. Les bornes des tranches sont calculées sur la première horloge et le `-ss` du worker compte sur la seconde : avec une marge de 1 ms, il sautait la première image de sa tranche et prenait la première de la suivante. Les exécutions visent désormais entre deux images (la moitié du plus petit écart autour de la borne, entre 1 et 50 ms) : un désaccord de quelques millisecondes tombe sur la même image. Test de banc T24 (faux ffprobe imitant celui d'Emby, source commençant à 5 ms, workers seuls, aussi avec un worker tué) : 11509 images sur 11509.
 - **Plugin** — Les rapports d'échec ne masquent plus les numéros de version qui ont la forme d'une adresse IPv4 (« worker <ip> » pour un worker 0.7.15.0, un pilote GPU 11.1.45.729 affiché « <ip> » ; issue #2) : seuls quatre nombres jusqu'à 255, le premier différent de 0, sont masqués.
+
+### Ajouté
+
+- **Plugin, worker** — Les rapports d'échec contiennent désormais de quoi résoudre une issue sans le fichier. Avant l'envoi, le plugin mesure l'échec en arrière-plan (priorité la plus basse, 150 s au plus, sans retarder la conversion d'Emby ni la suivante de la file) : empreinte temporelle de la source, temps listés et mesurés de chaque tranche, images comptées et attendues, décalage de la première image, début du fichier tel que le ffmpeg de chaque machine l'a lu, verdict automatique (`shifted-frames`, `file-start-disagreement`, `listing-late`...) et commande ffmpeg qui génère un fichier de test aux mêmes caractéristiques (mire et audio silencieux). Les chemins, noms, titres et tailles des paquets de la source ne sont jamais envoyés ; les commandes ne gardent que leurs réglages techniques. Le worker 0.7.18 transmet le début de fichier qu'il a lu. Le guide utilisateur liste ce qui est envoyé.
+
+### Banc
+
+- T24 : le défaut de l'issue #3 (échoue sans le correctif, +3 images). T25 : un vrai rejet provoqué avec l'ancienne marge, le rapport complet écrit dans un fichier (`IssueReportFile`) et vérifié : verdict, recette, tableau des tranches, rien de personnel. `fake-emby-ffprobe` imite le ffprobe d'Emby, dont le début de conteneur vaut 0.
 
 ## Plugin 0.7.30 — 01/11/2026
 

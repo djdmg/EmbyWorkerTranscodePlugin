@@ -1,3 +1,4 @@
+using System.Globalization;
 using RemoteTranscode.Common;
 
 namespace RemoteTranscode.Tests;
@@ -180,6 +181,42 @@ public class ConversionTests
         Assert.True(Array.IndexOf(run, "-ss") < Array.IndexOf(run, "-i"));
         Assert.Equal("12", run[Array.IndexOf(run, "-segment_start_number") + 1]);
         Assert.True(ArgTemplateValidator.Validate(run, out var error), error);
+    }
+
+    [Theory]
+    [InlineData(1001.0 / 24000, 0.020854)]   // 23.976 fps: halfway between two frames
+    [InlineData(0.04, 0.02)]
+    [InlineData(1.0 / 60, 0.008333)]
+    [InlineData(1.0, EmbyConversionPlanner.MaxSeekMargin)]   // slow video: capped
+    [InlineData(0.0005, EmbyConversionPlanner.FrameMargin)]  // frames almost together: never under the frame margin
+    public void Seek_margin_is_half_the_smallest_frame_gap(double gap, double expected) =>
+        Assert.Equal(expected, EmbyConversionPlanner.SeekMargin(gap), 6);
+
+    [Fact]
+    public void Seek_margin_without_a_gap_is_the_frame_margin()
+    {
+        Assert.Equal(EmbyConversionPlanner.FrameMargin, EmbyConversionPlanner.SeekMargin(null));
+        Assert.Equal(EmbyConversionPlanner.FrameMargin, EmbyConversionPlanner.SeekMargin(0));
+    }
+
+    // Issue #3: a boundary at 483.363 for Emby's ffmpeg, whose file starts at 0, is 483.358 for the
+    // workers' ffmpeg, whose file starts at 0.005. A 1 ms margin aims after that frame: the run would skip it.
+    [Fact]
+    public void A_run_aims_between_two_frames_so_builds_that_disagree_on_the_file_start_keep_the_same_frames()
+    {
+        const double frame = 1001.0 / 24000, start = 483.363, end = 604.191, workerFileStart = 0.005;
+        double margin = EmbyConversionPlanner.SeekMargin(frame);
+        string[] run = EmbyConversionPlanner.ChunkArgs(["-copyts", "-i", "{input:0}", "seg_%d.ts"], 100, start, true, end, null, margin);
+        double ss = double.Parse(run[Array.IndexOf(run, "-ss") + 1], CultureInfo.InvariantCulture);
+        double t = double.Parse(run[Array.IndexOf(run, "-t") + 1], CultureInfo.InvariantCulture);
+        foreach (double fileStart in new[] { 0, workerFileStart })
+        {
+            double threshold = ss + fileStart;   // ffmpeg counts -ss from the file's start
+            Assert.True(threshold <= start && threshold > start - frame, $"first frame kept, file start {fileStart}");
+            Assert.True(start + t < end && start + t > end - frame, $"last frame kept, file start {fileStart}");
+        }
+        double old = start - EmbyConversionPlanner.FrameMargin + workerFileStart;
+        Assert.True(old > start, "the 1 ms margin skipped the slice's first frame");
     }
 
     [Fact]

@@ -24,6 +24,8 @@ public sealed class JobRunner
     private readonly string jobDir;
     private readonly CancellationTokenSource stopping = new();
     private readonly Queue<string> stderrTail = new();
+    // The input's start as ffmpeg read it, reported with JobEnded: another build of ffmpeg may read the same file differently.
+    private double? inputStart;
     // Written once by RunAsync, read by Stop() from the WebSocket receive loop and the availability loop.
     private Process? process;
     // Set by Stop()/Cancel() from other threads (first reason wins, under stopGate); read by the upload loop to apply the
@@ -283,7 +285,7 @@ public sealed class JobRunner
             }
             try
             {
-                await send(new JobEnded(offer.JobId, exitCode, error));
+                await send(new JobEnded(offer.JobId, exitCode, error, inputStart));
                 log($"job {offer.JobId}: ended (exit {exitCode}{(error is null ? "" : ", " + error)}), {SegmentsUploaded} segments uploaded");
             }
             catch (Exception ex)
@@ -599,6 +601,7 @@ public sealed class JobRunner
         {
             while (await stderr.ReadLineAsync() is { } line)
             {
+                inputStart ??= FfmpegLog.InputStart(line);
                 // Last lines kept for the JobEnded error message when ffmpeg fails.
                 lock (stderrTail)
                 {

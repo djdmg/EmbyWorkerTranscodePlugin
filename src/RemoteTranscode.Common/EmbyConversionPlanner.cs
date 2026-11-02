@@ -447,13 +447,28 @@ public static class EmbyConversionPlanner
     /// </summary>
     public const double FrameMargin = 0.001;
 
+    /// <summary>Largest margin below a frame's time (see <see cref="SeekMargin"/>).</summary>
+    public const double MaxSeekMargin = 0.05;
+
+    /// <summary>
+    /// How far below a frame's time a run's -ss and -t are set: half the smallest gap seen between the source's frames,
+    /// so the run aims between two frames. ffmpeg counts -ss from the file's start, and two ffmpeg builds may not agree
+    /// on where a file starts: Emby's 5.1, which sets the boundaries, saw start 0 on a file where the workers' 9.0 saw
+    /// 0.005 s (both its streams start there). With a 1 ms margin, 5 ms was enough for a worker to skip the first frame of
+    /// its slice and, its -t counting from the first frame kept, to end on the next slice's first frame; its chunks,
+    /// listed one frame late, then made the assembled video too long (+21 frames, issue #3). Halfway between two frames,
+    /// such a difference selects the same frames. Without a usable gap, <see cref="FrameMargin"/>.
+    /// </summary>
+    public static double SeekMargin(double? smallestFrameGap) =>
+        smallestFrameGap is > 0 and var gap ? Math.Clamp(gap / 2, FrameMargin, MaxSeekMargin) : FrameMargin;
+
     /// <summary>
     /// Chunk command for a run whose first frame is at <paramref name="start"/> (a frame's time) and, for a slice that
     /// is not the last one, whose last frame is the one before <paramref name="end"/> (also a frame's time). A run
     /// from the source's first frame does not seek (<paramref name="seek"/> false). Chunks are numbered from
     /// <paramref name="index"/>. <paramref name="length"/>, the expected length of the run, avoids a tiny last chunk.
     /// </summary>
-    public static string[] ChunkArgs(IReadOnlyList<string> template, int index, double start, bool seek, double? end = null, double? length = null)
+    public static string[] ChunkArgs(IReadOnlyList<string> template, int index, double start, bool seek, double? end = null, double? length = null, double margin = FrameMargin)
     {
         var args = template.ToList();
         // A run a little longer than a whole number of chunks would end with a chunk of a few frames: longer chunks
@@ -465,14 +480,14 @@ public static class EmbyConversionPlanner
                 args[at + 1] = Time(l / Math.Floor(l / ChunkSeconds) + MinChunkSeconds);
         }
         // Input options before the (first) "-i". ffmpeg keeps the frames from the first one at or after -ss, and -t
-        // counts from that first kept frame. Both ends are set just below a frame's time, so a run keeps exactly the
+        // counts from that first kept frame. Both ends are set below a frame's time (see SeekMargin), so a run keeps exactly the
         // frames from its start frame up to the one before its end frame, and two runs that meet at the same frame
         // neither overlap nor leave a gap. Numbering from the resumed chunk keeps file names continuous.
         var input = new List<string>();
         if (seek)
-            input.AddRange(["-ss", Time(Math.Max(0, start - FrameMargin))]);
+            input.AddRange(["-ss", Time(Math.Max(0, start - margin))]);
         if (end is { } e)
-            input.AddRange(["-t", Time(Math.Max(FrameMargin, e - start - FrameMargin))]);
+            input.AddRange(["-t", Time(Math.Max(FrameMargin, e - start - margin))]);
         args.InsertRange(args.IndexOf("-i"), input);
         args.InsertRange(args.Count - 1, ["-segment_start_number", index.ToString(CultureInfo.InvariantCulture)]);
         return args.ToArray();

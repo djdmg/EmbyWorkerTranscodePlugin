@@ -56,6 +56,10 @@ public sealed class EncodeSlice
     [JsonIgnore]
     public string? ReservedFor { get; set; }
 
+    /// <summary>How far below a frame's time this slice's runs set -ss and -t (EmbyConversionPlanner.SeekMargin).</summary>
+    [JsonIgnore]
+    public double SeekMargin { get; init; } = EmbyConversionPlanner.FrameMargin;
+
     /// <summary>The scheduler was woken once for the current run nearing its end, to start the worker's next slice ahead.</summary>
     [JsonIgnore]
     public bool EndingSignalled { get; set; }
@@ -171,6 +175,10 @@ public sealed class EncodeTask
     /// <summary>Types of the machines that ran slices of this conversion (never their names), for the failure reports.</summary>
     [JsonIgnore]
     public List<string> MachineKinds { get; } = [];
+
+    /// <summary>Runs, resumes, ffmpeg versions and failing runs, for the failure reports.</summary>
+    [JsonIgnore]
+    public ConversionDiagnosticsLog DiagnosticsLog { get; } = new();
 
     /// <summary>The "assembled from chunks" summary of the last hand-over to the shim, for the failure reports.</summary>
     [JsonIgnore]
@@ -396,7 +404,7 @@ public sealed class EncodeTask
 /// with Emby's own command and verifies it; a conversion that cannot be finished remotely goes back to Emby's original
 /// command on the server.
 /// </summary>
-public sealed class EncodeQueue : IJobOwner
+public sealed partial class EncodeQueue : IJobOwner
 {
     private readonly CoordinatorOptions options;
     private readonly Dispatcher dispatcher;
@@ -544,6 +552,7 @@ public sealed class EncodeQueue : IJobOwner
             AudioAhead = options.EncodeAudioAhead ? plan.AudioAhead : null,
             Audio = !options.EncodeAudioAhead ? null : plan.AudioAhead is null ? $"converti à l'assemblage ({plan.AudioAheadReason})" : "en attente",
         };
+        task.DiagnosticsLog.AssemblyTemplate = plan.AssemblyTemplate;
         lock (gate)
         {
             tasks.Add(task);
@@ -606,9 +615,11 @@ public sealed class EncodeQueue : IJobOwner
         // Byte ranges for fetching ahead, with margins: a run reads from the keyframe before its start, and audio
         // packets interleaved around the boundaries. The first slice also needs the file's header.
         const long Margin = 4 << 20;
+        double seekMargin = options.EncodeSeekMarginSeconds ?? EmbyConversionPlanner.SeekMargin(frames.FirstOrDefault(f => f != null)?.SmallestFrameGap);
         return bounds.Select((b, i) => new EncodeSlice
         {
             Index = i,
+            SeekMargin = seekMargin,
             Start = b.Time,
             End = i + 1 < bounds.Count ? bounds[i + 1].Time : duration,
             Last = i + 1 == bounds.Count,
@@ -721,6 +732,7 @@ public sealed class EncodeQueue : IJobOwner
     /// </summary>
     public async Task RunAsync(CancellationToken token)
     {
+        using var stopDiagnostics = token.Register(diagnosticsStop.Cancel);
         while (!token.IsCancellationRequested)
         {
             await wake.WaitAsync(TimeSpan.FromSeconds(10), token).ContinueWith(_ => { });
@@ -1048,6 +1060,8 @@ public sealed class EncodeQueue : IJobOwner
             string kind = MachineKind(task, job.Worker);
             if (!task.MachineKinds.Contains(kind))
                 task.MachineKinds.Add(kind);
+            task.DiagnosticsLog.MachineFfmpeg[kind] = job.Worker.Hello?.Capabilities.FfmpegVersion;
+            task.DiagnosticsLog.RunStarted(slice.Index, slice.RunStartIndex > slice.FirstChunk);
             Touch(task, startSeconds <= slice.Start
                 ? $"tranche {slice.Index + 1}/{task.Slices.Count} sur {job.Worker.Identity.Name}"
                 : $"tranche {slice.Index + 1}/{task.Slices.Count} reprise à {startSeconds:0}s sur {job.Worker.Identity.Name}");
@@ -1117,7 +1131,7 @@ public sealed class EncodeQueue : IJobOwner
         // Filters translated here (EmbyFilters.TranslateArgs) with the conversion's tone mapper: the same graph for every
         // slice, whoever encodes it.
         string[] template = EmbyFilters.TranslateArgs(EmbyConversionPlanner.ChunkArgs(task.ChunkTemplate, startIndex, startSeconds, seek,
-            slice.Last ? null : slice.End, end - startSeconds), task.Requirements.ToneMapping);
+            slice.Last ? null : slice.End, end - startSeconds, slice.SeekMargin), task.Requirements.ToneMapping);
         var file = new PlannedFile(0, JobFileKind.Input, task.Input, Path.GetFileName(task.Input), inputSize);
         return new JobPlan(true, "conversion", template, [file], EmbyConversionPlanner.ChunkSeconds, startIndex,
             $"encode/{task.Id}/seg_%d.ts", $"encode/{task.Id}/list.m3u8", task.Requirements)
@@ -1378,6 +1392,7 @@ public sealed class EncodeQueue : IJobOwner
                 task.Participants.Add(LocalWorkerName);
             if (!task.MachineKinds.Contains(ServerKind))
                 task.MachineKinds.Add(ServerKind);
+            task.DiagnosticsLog.RunStarted(slice.Index, plan.StartIndex > slice.FirstChunk);
             Touch(task, alongside
                 ? $"tranche {slice.Index + 1}/{task.Slices.Count} encodée sur le serveur en parallèle des workers, à partir de {startSeconds:0}s"
                 : $"aucun worker : tranche {slice.Index + 1}/{task.Slices.Count} encodée sur le serveur à partir de {startSeconds:0}s");
@@ -1468,6 +1483,9 @@ public sealed class EncodeQueue : IJobOwner
         {
             while (await run.Process.StandardError.ReadLineAsync() is { } line)
             {
+                if (FfmpegLog.InputStart(line) is { } inputStart)
+                    lock (gate)
+                        task.DiagnosticsLog.FileStarts.TryAdd(ServerKind, inputStart);
                 lock (run.ErrorTail)
                 {
                     run.ErrorTail.Enqueue(line);
@@ -2015,6 +2033,7 @@ public sealed class EncodeQueue : IJobOwner
     {
         string? giveUp = null;
         string? failure = null;
+        int? failedSlice = null;
         EncodeTask? task;
         lock (gate)
         {
@@ -2024,6 +2043,8 @@ public sealed class EncodeQueue : IJobOwner
             slice.JobId = null;
             slice.Worker = null;
             slice.Speed = 0;
+            if (ended.InputStart is { } inputStart)
+                task.DiagnosticsLog.FileStarts.TryAdd(MachineKind(task, job.Worker), inputStart);
             bool covers = ended.ExitCode == 0 && task.Covers(slice);
             slice.IdleRuns = !covers && ended.Error is null && task.DropIdleRun(slice) ? slice.IdleRuns + 1 : 0;
             if (covers)
@@ -2061,6 +2082,7 @@ public sealed class EncodeQueue : IJobOwner
             else
             {
                 failure = ended.Error;
+                failedSlice = slice.Index + 1;
                 // A failing worker is set aside for this conversion; only the server's own failures give it back to
                 // Emby (OnLocalEndedAsync). The slice waits for another worker, or the server after the usual delay.
                 if (!task.FailedWorkers.Contains(job.Worker.Identity.Id))
@@ -2074,7 +2096,7 @@ public sealed class EncodeQueue : IJobOwner
             task.RefreshStatus();
         }
         if (failure != null)
-            ReportFailure(task, FailureKind.WorkerFailed, failure, job.Worker);
+            ReportFailure(task, FailureKind.WorkerFailed, failure, job.Worker, failedSlice: failedSlice);
         if (giveUp != null)
             await GiveUpAsync(task, giveUp);
         Wake();
@@ -2174,10 +2196,13 @@ public sealed class EncodeQueue : IJobOwner
     /// that links the report's anonymous source code to the file, so the administrator can find the episode. Call
     /// outside the lock.
     /// </summary>
-    private void ReportFailure(EncodeTask task, FailureKind kind, string error, WorkerConnection? failedWorker = null, string? check = null)
+    private void ReportFailure(EncodeTask task, FailureKind kind, string error, WorkerConnection? failedWorker = null, string? check = null, int? failedSlice = null)
     {
         try
         {
+            string? failed = failedWorker is null ? null : MachineKind(task, failedWorker);
+            if (kind != FailureKind.AssemblyRejected)
+                NoteFailingRun(task, error, failed ?? (error.Contains("sur le serveur", StringComparison.Ordinal) ? ServerKind : null), failedSlice);
             if (!reporter.TryClaim(task.Id))
                 return;
             List<string?> slices;
@@ -2189,7 +2214,6 @@ public sealed class EncodeQueue : IJobOwner
                 machines = [.. task.MachineKinds];
                 summary = task.AssemblySummary;
             }
-            string? failed = failedWorker is null ? null : MachineKind(task, failedWorker);
             if (failed != null && !machines.Contains(failed))
                 machines.Add(failed);
             // ffmpeg's last lines, as the worker sent them ("ffmpeg failed: line | line | ...").
@@ -2198,6 +2222,8 @@ public sealed class EncodeQueue : IJobOwner
                 ? error[FfmpegFailed.Length..].Split(" | ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList()
                 : [];
             var sensitive = SensitiveStrings(task);
+            // Pins the spool until the analysis ends, so nothing deletes the chunks under it.
+            var diagnosticsRequest = PrepareDiagnostics(task, kind, error, check);
             _ = Task.Run(async () =>
             {
                 try
@@ -2214,6 +2240,7 @@ public sealed class EncodeQueue : IJobOwner
                     {
                         logger.LogDebug("Conversion {Id}: source not analysed for the failure report ({Error})", task.Id, ex.Message);
                     }
+                    var diagnostics = await CollectDiagnosticsAsync(task, diagnosticsRequest);
                     double duration = source?.DurationSeconds ?? task.Source?.DurationSeconds ?? 0;
                     string code = FailureReportFormatter.SourceCode(size, duration, reporter.InstallId);
                     // Local log only: the published report carries the code, never the file.
@@ -2236,6 +2263,7 @@ public sealed class EncodeQueue : IJobOwner
                         AssemblySummary = summary,
                         Check = check,
                         Sensitive = sensitive,
+                        Diagnostics = diagnostics,
                     });
                 }
                 catch (Exception ex)
@@ -2372,6 +2400,9 @@ public sealed class EncodeQueue : IJobOwner
 
     private void DeleteSpool(string id)
     {
+        // Being analysed for a failure report: deleted when that ends (CollectDiagnosticsAsync).
+        if (spoolPins.DeferDelete(id))
+            return;
         try
         {
             if (Directory.Exists(SpoolDir(id)))

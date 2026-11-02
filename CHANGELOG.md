@@ -8,11 +8,22 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
-## Unreleased
+## Plugin 0.7.31 and worker 0.7.18 — 2026-11-02
+
+Built and published by GitHub Actions (release v0.7.31).
 
 ### Fixed
 
+- **Plugin** — Conversions rejected by a few extra frames (+3 to +22) on sources whose video starts a few milliseconds after 0 (issue #3). For the same file, Emby's ffmpeg 5.1 reads the file's start as 0 and the workers' ffmpeg 9 as 0.005 s. Slice boundaries are computed on the first clock, and a worker's `-ss` counts on the second: with a margin of 1 ms it skipped the first frame of its slice and took the first frame of the next one. Runs now aim halfway between two frames (half of the smallest gap found around the boundary, between 1 and 50 ms), so a disagreement of a few milliseconds lands on the same frame. Bench test T24 (fake ffprobe imitating Emby's, source starting at 5 ms, workers only, also with a worker killed): 11509/11509 frames.
 - **Plugin** — Failure reports no longer mask version numbers shaped like IPv4 addresses ("worker <ip>" for a worker 0.7.15.0, a GPU driver 11.1.45.729 shown as "<ip>"; issue #2): only four numbers up to 255, the first one not 0, are masked.
+
+### Added
+
+- **Plugin, worker** — Failure reports now hold what is needed to solve an issue without the file. Before sending, the plugin measures the failure in the background (lowest priority, 150 s at most, without delaying Emby's conversion or the next one in the queue): timing fingerprint of the source, listed against measured times for each slice, frames counted against expected, first frame's shift, the file's start as each machine's ffmpeg read it, an automatic verdict (`shifted-frames`, `file-start-disagreement`, `listing-late`...), and a ffmpeg command that generates a test file with the same characteristics (test pattern and silent audio). Paths, names, titles and sizes of source packets are never sent; commands keep their technical settings only. Worker 0.7.18 sends the file's start it read. What is sent is listed in the user guide.
+
+### Bench
+
+- T24: the bug of issue #3 (fails without the fix, +3 frames). T25: a real rejection forced with the old margin, the full report written to a file (`IssueReportFile`) and checked: verdict, recipe, slice table, nothing personal. `fake-emby-ffprobe` imitates Emby's ffprobe, whose container start is 0.
 
 ## Plugin 0.7.30 — 2026-11-01
 

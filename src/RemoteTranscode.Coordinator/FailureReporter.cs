@@ -81,6 +81,8 @@ public sealed class FailureReport
     public string? Check { get; init; }
     /// <summary>Strings of this installation that must never be published (never sent themselves).</summary>
     public IReadOnlyList<string> Sensitive { get; init; } = [];
+    /// <summary>The automatic analysis of this failure (see <see cref="FailureDiagnostics"/>); null when none could be run.</summary>
+    public DiagnosticsResult? Diagnostics { get; init; }
 }
 
 /// <summary>
@@ -106,11 +108,14 @@ public static class FailureReportFormatter
 
     /// <summary>
     /// Duplicate key: the kind of event, the error without anything that varies from one file or run to the next
-    /// (numbers, times, paths) and the source's video codec. Eight hex digits of its SHA-256.
+    /// (numbers, times, paths), the source's video codec and the verdict of the analysis, so two causes with the same
+    /// error do not share an issue. Eight hex digits of its SHA-256.
     /// </summary>
-    public static string Signature(FailureKind kind, string error, string? codec)
+    public static string Signature(FailureKind kind, string error, string? codec, string? verdict = null)
     {
         string key = $"{kind}|{Normalize(error)}|{(codec ?? "unknown").ToLowerInvariant()}";
+        if (verdict != null)
+            key += "|" + verdict;
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..8].ToLowerInvariant();
     }
 
@@ -170,6 +175,47 @@ public static class FailureReportFormatter
         return octets.Length == 4 && octets.All(o => int.TryParse(o, out int v) && v <= 255) && octets[0] != "0";
     }
 
+    /// <summary>
+    /// Removes only this installation's own strings: for generated text (recipes, commands, tables) whose shape the
+    /// general rules of <see cref="Sanitize"/> would take for a path ("scale=iw/2", "rate=24000/1001").
+    /// </summary>
+    public static string ScrubLiterals(string text, IEnumerable<string> sensitive)
+    {
+        // Longest first: a path goes as a whole before its file name or folder names are looked for.
+        foreach (string literal in sensitive.Where(v => !string.IsNullOrWhiteSpace(v) && v.Trim().Length >= 3)
+                     .Select(v => v.Trim()).Distinct().OrderByDescending(v => v.Length))
+            // Whole words only: a folder called "out" or "media" must not eat "output" or "median". "_" and "." do separate words.
+            text = Regex.Replace(text, @"(?<![\p{L}\p{N}])" + Regex.Escape(literal) + @"(?![\p{L}\p{N}])",
+                literal.Contains('/') || literal.Contains('\\') ? "<path>" : "<redacted>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return text;
+    }
+
+    // ffmpeg's dumps of a file's metadata: they hold titles, and no cause of a failure.
+    private static readonly Regex MetadataLine = new(
+        @"^\s*(?:Metadata:|Chapters?\b|Chapter #|Input #|Output #|Side data:|(?:title|comment|description|synopsis|album|album_artist|artist|composer|show|episode_id|episode_sort|season_number|network|genre|date|creation_time|encoder|handler_name|vendor_id|major_brand|minor_version|compatible_brands|filename|mimetype|language|publisher|copyright|performer|service_name|service_provider|BPS\S*|DURATION\S*|NUMBER_OF\S*|_STATISTICS\S*)\s*:)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>The lines of a failed run's error ("ffmpeg failed: line | line | ..."), without ffmpeg's metadata dumps.</summary>
+    public static List<string> ErrorLines(string? error)
+    {
+        const string FfmpegFailed = "ffmpeg failed: ";
+        string text = error ?? "";
+        if (text.StartsWith(FfmpegFailed, StringComparison.Ordinal))
+            text = text[FfmpegFailed.Length..];
+        return text.Split([" | ", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => !MetadataLine.IsMatch(l)).ToList();
+    }
+
+    /// <summary>The error without ffmpeg's metadata dumps, which sanitizing could not recognise as titles.</summary>
+    public static string WithoutMetadata(string? error)
+    {
+        const string FfmpegFailed = "ffmpeg failed: ";
+        if (string.IsNullOrEmpty(error))
+            return "";
+        bool prefixed = error.StartsWith(FfmpegFailed, StringComparison.Ordinal);
+        return (prefixed ? FfmpegFailed : "") + string.Join(" | ", ErrorLines(error));
+    }
+
     public static string Sanitize(string? text, IEnumerable<string> sensitive)
     {
         if (string.IsNullOrEmpty(text))
@@ -177,10 +223,7 @@ public static class FailureReportFormatter
         // URLs and e-mail addresses first, whole (a host name replaced inside them would cut them).
         string s = Url.Replace(text, "<url>");
         s = Email.Replace(s, "<email>");
-        // Longest first: a path goes as a whole before its file name or folder names are looked for.
-        foreach (string literal in sensitive.Where(v => !string.IsNullOrWhiteSpace(v) && v.Trim().Length >= 3)
-                     .Select(v => v.Trim()).Distinct().OrderByDescending(v => v.Length))
-            s = s.Replace(literal, literal.Contains('/') || literal.Contains('\\') ? "<path>" : "<redacted>", StringComparison.OrdinalIgnoreCase);
+        s = ScrubLiterals(s, sensitive);
         s = WindowsPath.Replace(s, "<path>");
         s = UncPath.Replace(s, "<path>");
         s = UnixPath.Replace(s, "<path>");
@@ -213,66 +256,99 @@ public static class FailureReportFormatter
 
     public static string Title(FailureReport report, string signature)
     {
-        string error = FirstLine(Sanitize(report.Error, report.Sensitive));
+        string error = FirstLine(Sanitize(WithoutMetadata(report.Error), report.Sensitive));
         if (error.Length > 90)
             error = error[..87] + "...";
         string codec = report.Source?.VideoCodec ?? "unknown codec";
-        return $"[{Marker}] {KindText(report.Kind)}: {error} ({codec}) sig:{signature}";
+        string verdict = report.Diagnostics?.Verdict is { Class: not VerdictClass.Undetermined } v ? $", {v.Name}" : "";
+        return $"[{Marker}] {KindText(report.Kind)}: {error} ({codec}{verdict}) sig:{signature}";
     }
 
+    /// <summary>
+    /// The report, within GitHub's limit (<see cref="ReportBudget"/>): the verdict and the recipe are served first, then
+    /// the summaries, the raw tables last and collapsed.
+    /// </summary>
     public static string Body(FailureReport report, string signature)
     {
         string Clean(string? text) => Sanitize(text, report.Sensitive);
+        string Scrub(string text) => ScrubLiterals(text, report.Sensitive);
         static string Fence(string text) => "```\n" + text.Replace("```", "'''") + "\n```\n";
-        var b = new StringBuilder();
-        b.Append(CultureInfo.InvariantCulture, $"<!-- {Marker} sig:{signature} -->\n");
-        b.Append("Automatic report sent by the Emby plugin \"Emby Distributed Transcoding\" (anonymous: no path, file name, title, address, host or user name).\n\n");
-        b.Append(CultureInfo.InvariantCulture, $"**Event:** {KindText(report.Kind)}: {KindDetail(report.Kind)}.\n");
-        b.Append(CultureInfo.InvariantCulture, $"**Signature:** `sig:{signature}` (event + normalised error + video codec)\n\n");
+        static string Capped(string text, int length) => text.Length <= length ? text : text[..length] + "...";
+        var diagnostics = report.Diagnostics;
+        var sections = new List<ReportSection>();
 
-        b.Append("### Error\n").Append(Fence(Clean(report.Error)));
-        if (report.WorkerErrorTail.Count > 0)
+        var head = new StringBuilder();
+        head.Append(CultureInfo.InvariantCulture, $"<!-- {Marker} sig:{signature} -->\n");
+        head.Append("Automatic report sent by the Emby plugin \"Emby Distributed Transcoding\" (anonymous: no path, file name, title, address, host or user name).\n\n");
+        head.Append(CultureInfo.InvariantCulture, $"**Event:** {KindText(report.Kind)}: {KindDetail(report.Kind)}.\n");
+        if (diagnostics is { } d)
         {
-            b.Append("\n### Last ffmpeg error lines of the worker\n");
-            b.Append(Fence(string.Join("\n", report.WorkerErrorTail.Select(Clean))));
-        }
-
-        b.Append("\n### Versions\n");
-        b.Append(CultureInfo.InvariantCulture, $"- Plugin: {Clean(report.PluginVersion)}\n");
-        b.Append(CultureInfo.InvariantCulture, $"- Server: server ({Clean(report.Server)})\n");
-        b.Append(CultureInfo.InvariantCulture, $"- Installation: `{Clean(report.Installation)}`\n");
-        if (report.FailedWorker != null)
-            b.Append(CultureInfo.InvariantCulture, $"- Failing machine: {Clean(report.FailedWorker)}\n");
-        foreach (string m in report.Machines.Where(m => m != report.FailedWorker))
-            b.Append(CultureInfo.InvariantCulture, $"- Also involved: {Clean(m)}\n");
-
-        b.Append(CultureInfo.InvariantCulture, $"\n### Source (code `{report.SourceCode ?? "?"}`)\n");
-        if (report.Source is { } src)
-        {
-            b.Append(CultureInfo.InvariantCulture, $"- Container: {Clean(src.Container ?? "?")}\n");
-            string bits = src.BitDepth is { } d ? $"{d} bits" : "? bits";
-            b.Append(CultureInfo.InvariantCulture, $"- Video: {Clean(src.VideoCodec ?? "?")}{(src.Profile is { } p ? $" ({Clean(p)})" : "")}, {bits} ({Clean(src.PixelFormat ?? "?")}), {src.Width}x{src.Height}, {Clean(src.FrameRate ?? "?")} fps\n");
-            b.Append(CultureInfo.InvariantCulture, $"- Video start_time: {(src.VideoStartTime is { } st ? st.ToString("0.######", CultureInfo.InvariantCulture) + " s" : "?")}\n");
-            b.Append(CultureInfo.InvariantCulture, $"- Duration: {src.DurationSeconds:0.###} s\n");
-            bool hdr = src.ColorTransfer is "smpte2084" or "arib-std-b67";
-            b.Append(CultureInfo.InvariantCulture, $"- HDR: {(hdr ? "yes" : "no")} (transfer {Clean(src.ColorTransfer ?? "?")}, primaries {Clean(src.ColorPrimaries ?? "?")})\n");
-            b.Append(CultureInfo.InvariantCulture, $"- Audio: {src.AudioCodecs.Count} track(s){(src.AudioCodecs.Count > 0 ? " (" + Clean(string.Join(", ", src.AudioCodecs)) + ")" : "")}\n");
+            head.Append(CultureInfo.InvariantCulture, $"**Verdict:** `{d.Verdict.Name}`: {Scrub(d.Verdict.Text)}\n");
+            head.Append(CultureInfo.InvariantCulture, $"**Diagnostics:** {DiagnosticsRenderer.StatusText(d)}.\n");
+            foreach (string note in d.Notes.Take(20))
+                head.Append("- ").Append(Clean(note)).Append('\n');
         }
         else
-            b.Append("- not analysed (ffprobe failed or source gone)\n");
+            head.Append("**Diagnostics:** none could be run.\n");
+        head.Append(CultureInfo.InvariantCulture, $"**Signature:** `sig:{signature}` (event + normalised error + video codec{(diagnostics != null ? " + verdict" : "")})\n");
+        sections.Add(ReportSection.Whole(0, "header", head.ToString()));
 
-        b.Append("\n### Conversion\n");
-        b.Append(CultureInfo.InvariantCulture, $"- Requested encoder: {Clean(report.RequestedEncoder)}\n");
-        b.Append(CultureInfo.InvariantCulture, $"- Filters requested by Emby: {(report.Filters.Count > 0 ? Clean(string.Join(", ", report.Filters)) : "none")}\n");
-        b.Append(CultureInfo.InvariantCulture, $"- Slices: {report.SliceMachines.Count}\n");
-        foreach (string line in SliceRanges(report.SliceMachines))
-            b.Append(CultureInfo.InvariantCulture, $"  - {Clean(line)}\n");
-        if (report.AssemblySummary != null)
-            b.Append("- Assembled from chunks (slice:count@end/listed length):\n").Append(Fence(Clean(report.AssemblySummary.Trim())));
+        if (diagnostics != null)
+            sections.AddRange(DiagnosticsRenderer.Recipe(diagnostics, Scrub));
+
+        sections.Add(ReportSection.Whole(2, "error", "\n### Error\n" + Fence(Capped(Clean(WithoutMetadata(report.Error)), 4000))));
+        var tail = report.WorkerErrorTail.Where(l => ErrorLines(l).Count > 0).Take(30).Select(l => Capped(Clean(l), 400).Replace("```", "'''")).ToList();
+        if (tail.Count > 0)
+            sections.Add(new ReportSection(2, "worker error lines", "\n### Last ffmpeg error lines of the worker\n```\n", tail, "```\n"));
+
+        var versions = new StringBuilder("\n### Versions\n");
+        versions.Append(CultureInfo.InvariantCulture, $"- Plugin: {Clean(report.PluginVersion)}\n");
+        versions.Append(CultureInfo.InvariantCulture, $"- Server: server ({Clean(report.Server)}){FfmpegOf(diagnostics?.ServerFfmpeg)}\n");
+        versions.Append(CultureInfo.InvariantCulture, $"- Installation: `{Clean(report.Installation)}`\n");
+        string FfmpegFor(string machine) => FfmpegOf(diagnostics?.MachineFfmpeg.GetValueOrDefault(machine));
+        if (report.FailedWorker != null)
+            versions.Append(CultureInfo.InvariantCulture, $"- Failing machine: {Clean(report.FailedWorker)}{FfmpegFor(report.FailedWorker)}\n");
+        foreach (string m in report.Machines.Where(m => m != report.FailedWorker))
+            versions.Append(CultureInfo.InvariantCulture, $"- Also involved: {Clean(m)}{FfmpegFor(m)}\n");
+        sections.Add(ReportSection.Whole(3, "versions", versions.ToString()));
+
+        var source = new StringBuilder();
+        source.Append(CultureInfo.InvariantCulture, $"\n### Source (code `{report.SourceCode ?? "?"}`)\n");
+        if (report.Source is { } src)
+        {
+            source.Append(CultureInfo.InvariantCulture, $"- Container: {Clean(src.Container ?? "?")}\n");
+            string bits = src.BitDepth is { } depth ? $"{depth} bits" : "? bits";
+            source.Append(CultureInfo.InvariantCulture, $"- Video: {Clean(src.VideoCodec ?? "?")}{(src.Profile is { } p ? $" ({Clean(p)})" : "")}, {bits} ({Clean(src.PixelFormat ?? "?")}), {src.Width}x{src.Height}, {Clean(src.FrameRate ?? "?")} fps\n");
+            source.Append(CultureInfo.InvariantCulture, $"- Video start_time: {(src.VideoStartTime is { } st ? st.ToString("0.######", CultureInfo.InvariantCulture) + " s" : "?")}\n");
+            source.Append(CultureInfo.InvariantCulture, $"- Duration: {src.DurationSeconds:0.###} s\n");
+            bool hdr = src.ColorTransfer is "smpte2084" or "arib-std-b67";
+            source.Append(CultureInfo.InvariantCulture, $"- HDR: {(hdr ? "yes" : "no")} (transfer {Clean(src.ColorTransfer ?? "?")}, primaries {Clean(src.ColorPrimaries ?? "?")})\n");
+            source.Append(CultureInfo.InvariantCulture, $"- Audio: {src.AudioCodecs.Count} track(s){(src.AudioCodecs.Count > 0 ? " (" + Clean(string.Join(", ", src.AudioCodecs)) + ")" : "")}\n");
+        }
+        else
+            source.Append("- not analysed (ffprobe failed or source gone)\n");
+        sections.Add(ReportSection.Whole(3, "source", source.ToString()));
+
+        var conversion = new StringBuilder("\n### Conversion\n");
+        conversion.Append(CultureInfo.InvariantCulture, $"- Requested encoder: {Clean(report.RequestedEncoder)}\n");
+        conversion.Append(CultureInfo.InvariantCulture, $"- Filters requested by Emby: {(report.Filters.Count > 0 ? Clean(string.Join(", ", report.Filters)) : "none")}\n");
         if (report.Check != null)
-            b.Append(CultureInfo.InvariantCulture, $"- Check: {Clean(report.Check)}\n");
-        return b.ToString();
+            conversion.Append(CultureInfo.InvariantCulture, $"- Check: {Clean(report.Check)}\n");
+        conversion.Append(CultureInfo.InvariantCulture, $"- Slices: {report.SliceMachines.Count}\n");
+        var conversionLines = SliceRanges(report.SliceMachines).Select(line => $"  - {Clean(line)}").ToList();
+        if (report.AssemblySummary != null)
+            conversionLines.Add("- Assembled from chunks (slice:count@end/listed length):\n" + Fence(Clean(report.AssemblySummary.Trim())).TrimEnd());
+        sections.Add(new ReportSection(3, "conversion", conversion.ToString(), conversionLines));
+
+        if (diagnostics != null)
+        {
+            sections.AddRange(DiagnosticsRenderer.Summaries(diagnostics, Scrub));
+            sections.AddRange(DiagnosticsRenderer.Raw(diagnostics).Select(s => s with { Lines = s.Lines.Select(Scrub).ToList() }));
+        }
+        return ReportBudget.Compose(sections);
     }
+
+    private static string FfmpegOf(string? version) => string.IsNullOrEmpty(version) ? "" : $", ffmpeg {version}";
 
     /// <summary>Consecutive slices done by the same type of machine on one line: "slices 1-12: worker ...".</summary>
     public static IEnumerable<string> SliceRanges(IReadOnlyList<string?> machines)
@@ -345,7 +421,7 @@ public sealed class FailureReporter
     public static string Version { get; } = typeof(FailureReporter).Assembly.GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{Math.Max(0, v.Build)}" : "?";
 
     public FailureReportState State =>
-        string.IsNullOrWhiteSpace(options.IssueReportToken) ? FailureReportState.NoToken
+        string.IsNullOrWhiteSpace(options.IssueReportToken) && options.IssueReportFile is null ? FailureReportState.NoToken
         : !options.IssueReporting ? FailureReportState.Disabled
         : FailureReportState.Active;
 
@@ -432,9 +508,17 @@ public sealed class FailureReporter
     public async Task<Outcome> SendAsync(FailureReport report, CancellationToken token = default)
     {
         string? secret = options.IssueReportToken;
-        if (State != FailureReportState.Active || string.IsNullOrWhiteSpace(secret))
+        if (State != FailureReportState.Active)
             return Outcome.NotSent;
-        string signature = FailureReportFormatter.Signature(report.Kind, FailureReportFormatter.Sanitize(report.Error, report.Sensitive), report.Source?.VideoCodec);
+        if (options.IssueReportFile is { } file)
+        {
+            string local = FailureReportFormatter.Signature(report.Kind, FailureReportFormatter.Sanitize(report.Error, report.Sensitive), report.Source?.VideoCodec, report.Diagnostics?.Verdict.Name);
+            await File.WriteAllTextAsync(file, FailureReportFormatter.Title(report, local) + Environment.NewLine + Environment.NewLine + FailureReportFormatter.Body(report, local), token);
+            return Outcome.NotSent;
+        }
+        if (string.IsNullOrWhiteSpace(secret))
+            return Outcome.NotSent;
+        string signature = FailureReportFormatter.Signature(report.Kind, FailureReportFormatter.Sanitize(report.Error, report.Sensitive), report.Source?.VideoCodec, report.Diagnostics?.Verdict.Name);
         string title = FailureReportFormatter.Title(report, signature);
         string body = FailureReportFormatter.Body(report, signature);
         try

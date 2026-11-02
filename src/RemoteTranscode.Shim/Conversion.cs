@@ -238,8 +238,10 @@ public sealed class ConversionSession : IDisposable
 
     private async Task<VideoSpan> VideoSpanAsync(string path, double duration, double window)
     {
-        string from = Math.Max(0, duration - window).ToString("0.###", CultureInfo.InvariantCulture);
-        using var doc = JsonDocument.Parse(await RunProbeAsync(["-v", "error", "-select_streams", "V:0", "-read_intervals", from + "%",
+        // A bounded interval: ffprobe 9 sometimes prints no packet at all, without error, for an open-ended one.
+        string from = Math.Max(0, duration - window).ToString("0.###", CultureInfo.InvariantCulture) + "%"
+            + (duration + 3600).ToString("0.###", CultureInfo.InvariantCulture);
+        using var doc = JsonDocument.Parse(await RunProbeAsync(["-v", "error", "-select_streams", "V:0", "-read_intervals", from,
             "-show_entries", "packet=pts_time,dts_time,duration_time:stream=start_time,avg_frame_rate", "-print_format", "json", path]));
         var root = doc.RootElement;
         double start = 0, frame = 0;

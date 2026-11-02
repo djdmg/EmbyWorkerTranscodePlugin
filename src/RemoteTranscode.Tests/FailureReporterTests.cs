@@ -28,12 +28,12 @@ public class FailureReporterTests : IDisposable
     {
         Kind = kind,
         Error = error ?? $"ffmpeg failed: [matroska,webm @ 000001d2c3b4a590] Read error at pos. 1234567 | Error opening input file {Input}. | " +
-            @"C:\Users\Dimitri\AppData\Local\EmbyRemoteWorker\cache\Dr House - S01E01.mkv: Invalid data found | worker GAMING-PC (192.168.1.42) via https://emby.example.org:8097/jobs",
+            @"C:\Users\SomeUser\AppData\Local\EmbyRemoteWorker\cache\Dr House - S01E01.mkv: Invalid data found | worker GAMING-PC (192.168.1.42) via https://emby.example.org:8097/jobs",
         WorkerErrorTail =
         [
             "[matroska,webm @ 000001d2c3b4a590] Read error at pos. 1234567",
             $"Error opening input file {Input}.",
-            @"C:\Users\Dimitri\AppData\Local\EmbyRemoteWorker\cache\Dr House - S01E01.mkv: Invalid data found",
+            @"C:\Users\SomeUser\AppData\Local\EmbyRemoteWorker\cache\Dr House - S01E01.mkv: Invalid data found",
             "contact dimitri@example.fr on nas.local or fe80::1c2b:3a4d:5e6f:7081",
         ],
         FailedWorker = FailureReportFormatter.DescribeWorker("0.7.14", ["NVIDIA GeForce RTX 4080"], ["libx264", "h264_nvenc", "hevc_nvenc"], "libx264"),
@@ -56,7 +56,7 @@ public class FailureReporterTests : IDisposable
     private static readonly string[] Forbidden =
     [
         "volume1", "Séries", "House", "Saison", "Symptômes", "Rebecca", "Adler", "S01E01", "sync", "7f3c2a9b1d4e4f6a8b0c1d2e3f4a5b6c",
-        "Users", "Dimitri", "AppData", "EmbyRemoteWorker", "GAMING-PC", "192.168.1.42", "emby.example.org", "example.org", "dimitri@",
+        "Users", "SomeUser", "AppData", "EmbyRemoteWorker", "GAMING-PC", "192.168.1.42", "emby.example.org", "example.org", "dimitri@",
         "nas.local", "fe80", ".mkv", ".mp4", "3f9a1c2e5b7d4e6f8a9b0c1d2e3f4a5b",
     ];
 
@@ -261,6 +261,45 @@ public class FailureReporterTests : IDisposable
     {
         Assert.Equal(FailureReporter.Outcome.Failed, await Reporter(new FakeGitHub { Throw = true }).SendAsync(SampleReport()));
         Assert.Equal(FailureReporter.Outcome.Failed, await Reporter(new FakeGitHub { Status = HttpStatusCode.Unauthorized }).SendAsync(SampleReport()));
+    }
+
+    [Fact]
+    public void TitleInAnErrorDumpIsNotPublished()
+    {
+        var report = new FailureReport
+        {
+            Kind = FailureKind.WorkerFailed,
+            Error = "ffmpeg failed: Input #0, matroska,webm, from 'x': | Metadata: | title           : Une Chose Sans Forme | Chapter #0:1: start 60 | Read error at pos. 12",
+            WorkerErrorTail = ["title           : Une Chose Sans Forme", "comment         : pour SomeUser", "Read error at pos. 12"],
+        };
+        string sig = FailureReportFormatter.Signature(report.Kind, report.Error, null);
+        foreach (string text in new[] { FailureReportFormatter.Title(report, sig), FailureReportFormatter.Body(report, sig) })
+        {
+            Assert.DoesNotContain("Chose", text);
+            Assert.DoesNotContain("SomeUser", text);
+            Assert.DoesNotContain("Chapter #", text);
+        }
+        Assert.Contains("Read error at pos. 12", FailureReportFormatter.Body(report, sig));
+    }
+
+    [Fact]
+    public async Task TheVerdictIsInTheSignatureAndTheBodySentStaysUnderTheLimit()
+    {
+        // The same error with two causes opens two issues (#2 and #3 shared one signature).
+        var github = new FakeGitHub();
+        string Sent() => System.Text.Json.JsonDocument.Parse(github.Calls[^1].Body!).RootElement.GetProperty("body").GetString()!;
+        var late = new DiagnosticsResult { Verdict = new Verdict(VerdictClass.ListingLate, "frames right, listed late by a uniform +36.7 ms.") };
+        var extra = new DiagnosticsResult { Verdict = new Verdict(VerdictClass.ExtraFrames, "real extra frames in slice 3.") };
+        var report = (DiagnosticsResult d) => new FailureReport { Kind = FailureKind.AssemblyRejected, Error = "vidéo de 10.5s au lieu de 10.1s (+9 images)", Diagnostics = d };
+        Assert.Equal(FailureReporter.Outcome.Created, await Reporter(github).SendAsync(report(late)));
+        string first = Sent();
+        Assert.Equal(FailureReporter.Outcome.Created, await Reporter(github).SendAsync(report(extra)));
+        string second = Sent();
+        Assert.NotEqual(first.Split("-->")[0], second.Split("-->")[0]);
+        Assert.Contains("**Verdict:** `listing-late`", first);
+        Assert.Contains("**Verdict:** `extra-frames`", second);
+        Assert.Contains("listing-late", System.Text.Json.JsonDocument.Parse(github.Calls[1].Body!).RootElement.GetProperty("title").GetString());
+        Assert.True(first.Length <= 65536);
     }
 
     [Fact]

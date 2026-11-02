@@ -140,7 +140,8 @@ public sealed record JobAnswer(string JobId, bool Accepted, string? Reason) : Me
 
 public sealed record JobProgress(string JobId, long Frame, double Fps, double TimeSeconds, double Speed) : Message;
 
-public sealed record JobEnded(string JobId, int ExitCode, string? Error) : Message;
+/// <param name="InputStart">The input's start as this run's ffmpeg read it ("Input #0 ... start:"), a number only; null from older workers.</param>
+public sealed record JobEnded(string JobId, int ExitCode, string? Error, double? InputStart = null) : Message;
 
 public sealed record CancelJob(string JobId, string Reason) : Message;
 

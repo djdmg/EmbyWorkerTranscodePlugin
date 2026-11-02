@@ -124,7 +124,9 @@ function T15 {
     $code = Wait-Exit $s 60
     $alongside = Log-Excerpt 'coordinator' 'alongside the workers, encoding slice' 1
     $handOver = @(Log-Excerpt 'coordinator' 'stopping the local encode to hand over' 20).Count
-    $e = Encode-Summary $out
+    # Le shim se termine juste après avoir envoyé son verdict : le coordinateur peut ne pas l'avoir encore traité.
+    $e = Encode-Summary $out; $until = (Get-Date).AddSeconds(10)
+    while ((Prop $e 'Status') -eq 'Assembling' -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 300; $e = Encode-Summary $out }
     $verify = Log-Excerpt 'shim-t15' 'source .*sultat|rejet' 1
     $chk = Check-Output $out (Probe $src).Duration 1
     $ok = $alongside -and $overlap -ge 2 -and $code -eq 0 -and (Prop $e 'Status') -eq 'Completed' -and $verify -notmatch 'rejet' -and $chk.Ok
@@ -697,4 +699,97 @@ function T23Core {
     $f = { param($m) if ($m.Offsets) { '{0} repères, bip-éclair moy {1:+0.0;-0.0} ms [{2:+0.0;-0.0} ; {3:+0.0;-0.0}]' -f $m.Offsets.Count, $m.Mean, $m.Min, $m.Max } else { "aucun repère ($($m.Flashes) éclairs, $($m.Beeps) bips)" } }
     Add-Result 'T23' 'Lip-sync mesuré (éclair + bip) avec l''audio converti à l''avance' $(if ($ok) { 'PASS' } else { 'FAIL' }) (
         "source : $(& $f $ms) | classique : $(& $f $mc) | à l'avance : $(& $f $ma) | écart à la source au pire {0:0.0} ms | images source/sortie $($srcV.Frames)/$($outV.Frames) | audio source {1:0.000}s, sortie {2:0.000}s | assemblage classique {3} s, à l'avance {4} s | workers : $(Prop $a.Summary 'Worker') | $($cmp.Text) | contrôle : « $($a.Verify -join ' / ') »" -f $worst, $srcA.Duration, $outA.Duration, $c.Assembly, $a.Assembly)
+}
+
+# Source HEVC 8 bits dont tout le fichier (vidéo et audio) commence à 0,005 s (issue #3 : rejets à +21 et +22 images).
+# Après un saut, ffmpeg 9 place les images sur sa grille de sortie : tous les temps listés d'un run de worker sont en retard
+# d'une image moins le décalage de la source (+37 ms), les images restant justes. Chaque tranche allongeait la liste
+# d'assemblage d'autant. Workers seuls (le serveur masquait le défaut en prenant la moitié des tranches) :
+# a) sans incident ; b) w2 tué en pleine tranche : la reprise ne doit ni perdre ni répéter d'image.
+#   pwsh -File run-tests.ps1 -Only T24
+function T24 {
+    $dst = Join-Path $Paths.Media 'film_hevc_tsoffset5.mkv'
+    if (-not (Test-Path $dst)) {
+        $src = Join-Path $Paths.Media 'film_2398.mkv'
+        $tmp = Join-Path $Paths.Media 'film_hevc_tsoffset5.video.mkv'
+        & $Paths.WorkerFfmpeg -hide_banner -v error -y -t 480 -i $src -an -vf scale=1920:960 -c:v libx265 -preset ultrafast -x265-params log-level=none -g 96 $tmp
+        if ($LASTEXITCODE) { throw 'génération de la source HEVC en échec' }
+        & $Paths.ServerFfmpeg -hide_banner -v error -y -i $tmp -t 480 -i $src -map 0:v -map 1:a -c copy -output_ts_offset 0.005 $dst
+        if ($LASTEXITCODE) { throw 'remux de la source HEVC en échec' }
+        Remove-Item $tmp -Force
+    }
+    # Le ffprobe 5.1 d'Emby voit ce fichier commencer à 0 quand le ffmpeg 9 des workers le voit à 0,005 s : les bornes des
+    # tranches sont calculées avec un zéro, appliquées avec l'autre. Ce faux ffprobe reproduit l'écart du vrai serveur.
+    $fakeProbe = [IO.Path]::Combine($Paths.Work, 'bin', 'fake-emby-ffprobe', 'fake-emby-ffprobe.exe')
+    if (-not (Test-Path $fakeProbe)) {
+        & dotnet publish (Join-Path $PSScriptRoot 'fake-emby-ffprobe') -c Release -o (Split-Path $fakeProbe) --nologo -v q | Out-Null
+        if ($LASTEXITCODE) { throw 'publication du faux ffprobe en échec' }
+    }
+    Set-Content (Join-Path (Split-Path $fakeProbe) 'fake-emby-ffprobe.txt') $Paths.ServerFfprobe -Encoding ascii
+    Restart-BenchCoordinator @{ EncodeLocalAlongsideWorkers = $false; ServerFfprobe = $fakeProbe } 'coordinator-before-t24'
+    try {
+        foreach ($variant in @(@{ Id = 'a'; Kill = $false; Label = 'workers seuls' }, @{ Id = 'b'; Kill = $true; Label = 'w2 tué en pleine tranche' })) {
+            Ensure-Workers @('w1', 'w2')
+            $name = "t24$($variant.Id)"
+            $srcV = Measure-Video $dst
+            $out = Join-Path $Paths.Out "conv-$name.mp4"
+            $s = Start-Shim (New-ConversionArgs -InputPath $dst -OutputPath $out -InputCodec hevc) $name
+            $killed = ''
+            if ($variant.Kill) {
+                $deadline = (Get-Date).AddSeconds(600)
+                while ((Get-Date) -lt $deadline -and -not $s.HasExited) {
+                    $e = Encode-Summary $out
+                    if ($e -and $e.Chunks -ge 3) { Stop-Worker 'w2' -Hard; $killed = "w2 tué à $($e.Chunks) morceaux"; break }
+                    Start-Sleep 1
+                }
+            }
+            $code = Wait-Exit $s 1800
+            $r = Get-ConversionRunners $out
+            $outV = if (Test-Path $out) { Measure-Video $out } else { $null }
+            $verify = Log-Excerpt "shim-$name" 'source .*sultat|rejet' 1
+            $assembled = Log-Excerpt 'coordinator' 'assembled from chunks' 100 | Select-Object -Last 1
+            $resume = Log-Excerpt 'coordinator' 'resuming at the source frame' 100 | Select-Object -Last 1
+            $fd = 1001 / 24000
+            $ok = $code -eq 0 -and $outV -and $outV.Frames -eq $srcV.Frames -and [math]::Abs($outV.Duration - $srcV.Duration) -le 1.5 * $fd `
+                -and ($verify -join ' ') -match 'sultat' -and ($verify -join ' ') -notmatch 'rejet' -and (Prop $r.Summary 'Status') -eq 'Completed' -and $r.LocalRuns -eq 0
+            $oText = if ($outV) { '{0} images, {1:0.000}s' -f $outV.Frames, $outV.Duration } else { 'absente' }
+            Add-Result "T24$($variant.Id)" "Source HEVC à start_time 0,005 : $($variant.Label), à l'image près" $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+                "source : $($srcV.Frames) images, {0:0.000}s | sortie : $oText | $killed | reprise : « $resume » | workers : $($r.Workers -join ', '), tranches serveur : $($r.LocalRuns) | « $assembled » | contrôle : « $($verify -join ' / ') » | final : $(Prop $r.Summary 'Status') | code $code" -f $srcV.Duration)
+        }
+    } finally { Restart-BenchCoordinator @{} 'coordinator-t24' }
+    Ensure-Workers @('w1', 'w2')
+}
+
+# Rapport d'échec complet, sur un vrai rejet : l'ancienne marge de 1 ms (EncodeSeekMarginSeconds) et le faux ffprobe d'Emby
+# reproduisent l'issue #3. Le coordinateur écrit le rapport dans un fichier (IssueReportFile). Attendu : le verdict trouve
+# le désaccord sur le début du fichier et les images décalées, le rapport contient la recette et le tableau des tranches,
+# et rien de personnel (ni chemin, ni nom de fichier, ni titre).
+#   pwsh -File run-tests.ps1 -Only T25
+function T25 {
+    $dst = Join-Path $Paths.Media 'film_hevc_tsoffset5.mkv'
+    if (-not (Test-Path $dst)) { throw 'source absente : lancer T24 d''abord' }
+    $fakeProbe = [IO.Path]::Combine($Paths.Work, 'bin', 'fake-emby-ffprobe', 'fake-emby-ffprobe.exe')
+    Set-Content (Join-Path (Split-Path $fakeProbe) 'fake-emby-ffprobe.txt') $Paths.ServerFfprobe -Encoding ascii
+    $report = Join-Path $Paths.Out 'report-t25.md'
+    Remove-Item $report -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $Paths.CoordDir 'data\issue-reports.json') -Force -ErrorAction SilentlyContinue
+    Restart-BenchCoordinator @{ EncodeLocalAlongsideWorkers = $false; ServerFfprobe = $fakeProbe; EncodeSeekMarginSeconds = 0.001; IssueReportFile = (U $report) } 'coordinator-before-t25'
+    try {
+        Ensure-Workers @('w1', 'w2')
+        $out = Join-Path $Paths.Out 'conv-t25.mp4'
+        $s = Start-Shim (New-ConversionArgs -InputPath $dst -OutputPath $out -InputCodec hevc) 't25'
+        $deadline = (Get-Date).AddSeconds(900)
+        while ((Get-Date) -lt $deadline -and -not (Test-Path $report)) { Start-Sleep 2 }
+        $rejected = Log-Excerpt 'shim-t25' 'rejet' 1
+        $body = if (Test-Path $report) { Get-Content $report -Raw } else { '' }
+        $expected = @('**Verdict:**', 'file-start-disagreement', 'shifted-frames', 'Reproduce without the original file', 'output_ts_offset', 'Slices: listed against measured', 'Source timing fingerprint')
+        $missing = @($expected | Where-Object { $body -notmatch [regex]::Escape($_) })
+        $leaks = @('film_hevc', 'tsoffset5', $env:USERNAME, 'emby/test', 'emby\test', 'localhost', '127.0.0.1') | Where-Object { $body.Contains($_) }
+        $verdict = ($body -split "`n" | Where-Object { $_ -like '*Verdict:*' } | Select-Object -First 1)
+        $ok = $body.Length -gt 0 -and $missing.Count -eq 0 -and @($leaks).Count -eq 0 -and "$rejected" -match 'rejet'
+        Add-Result 'T25' 'Rapport d''échec complet sur un vrai rejet : verdict, recette, tableau des tranches, rien de personnel' $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+            "rejet : « $rejected » | taille du rapport : $($body.Length) | manque : $($missing -join ', ') | fuites : $(@($leaks) -join ', ') | $verdict | rapport : $report")
+        Stop-Mine $s.P.Id -Tree
+    } finally { Restart-BenchCoordinator @{} 'coordinator-t25' }
+    Ensure-Workers @('w1', 'w2')
 }

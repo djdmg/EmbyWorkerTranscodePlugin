@@ -147,7 +147,7 @@ public sealed class ServerMedia(CoordinatorOptions options)
     /// like ffmpeg's -ss), and where in the file a run starting there begins reading (the keyframe it decodes from) and
     /// a run ending there stops (that frame). Positions are null when ffprobe did not report them.
     /// </summary>
-    public sealed record Boundary(double Time, long? KeyframePosition, long? Position);
+    public sealed record Boundary(double Time, long? KeyframePosition, long? Position, double? SmallestFrameGap = null);
 
     /// <summary>
     /// For each time, its <see cref="Boundary"/> (null where no frame was read). One ffprobe pass that reads packets
@@ -166,6 +166,8 @@ public sealed class ServerMedia(CoordinatorOptions options)
         // For each time, the smallest presentation time at or after it. A window always contains that frame (and the
         // keyframe before it), so it is the true next frame.
         var times0 = frames.Select(f => f.Time).ToList();
+        // Between frames read in the same window; the gap between two windows is seconds long and never the smallest.
+        double? smallestGap = times0.Zip(times0.Skip(1), (a, b) => b - a).Where(gap => gap > 0).Select(gap => (double?)gap).Min();
         for (int i = 0; i < times.Count; i++)
         {
             int k = times0.BinarySearch(times[i] - 1e-6);
@@ -175,7 +177,7 @@ public sealed class ServerMedia(CoordinatorOptions options)
             if (k >= frames.Count || !(times[i] <= 0 || frames[k].Time < times[i] + 5))
                 continue;
             long? keyframe = frames.Take(k + 1).LastOrDefault(f => f.Key).Position;
-            result[i] = new Boundary(frames[k].Time, keyframe, frames[k].Position);
+            result[i] = new Boundary(frames[k].Time, keyframe, frames[k].Position, smallestGap);
         }
         return result;
     }
@@ -319,6 +321,67 @@ public sealed class ServerMedia(CoordinatorOptions options)
             throw;
         }
         return (p.ExitCode, await stdout, await stderr);
+    }
+
+    /// <summary>Largest output kept from an analysis tool (a whole video's packet times fit well under it).</summary>
+    private const int MaxQuietOutput = 32 * 1024 * 1024;
+
+    /// <summary>ffprobe at the lowest priority, for the failure reports: must not slow down a conversion.</summary>
+    public Task<(int Code, string Output, string Error)> ProbeQuietlyAsync(IReadOnlyList<string> args, CancellationToken token) =>
+        RunQuietlyAsync(options.ServerFfprobe, args, token);
+
+    /// <summary>ffmpeg at the lowest priority, for the failure reports.</summary>
+    public Task<(int Code, string Output, string Error)> FfmpegQuietlyAsync(IReadOnlyList<string> args, CancellationToken token) =>
+        RunQuietlyAsync(options.ServerFfmpeg, args, token);
+
+    private async Task<(int Code, string Output, string Error)> RunQuietlyAsync(string exe, IReadOnlyList<string> args, CancellationToken token)
+    {
+        var psi = new ProcessStartInfo(exe)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        Prepare(psi);
+        foreach (string a in args)
+            psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        try
+        {
+            // Idle on Windows, nice 19 on Linux. Not allowed everywhere: the run goes on anyway.
+            p.PriorityClass = ProcessPriorityClass.Idle;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException or NotSupportedException) { }
+        using var running = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var stdout = ReadCappedAsync(p.StandardOutput, MaxQuietOutput, running);
+        var stderr = ReadCappedAsync(p.StandardError, 64 * 1024, null);
+        try
+        {
+            await p.WaitForExitAsync(running.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try { p.Kill(true); } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            token.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("output too long");
+        }
+        return (p.ExitCode, await stdout, await stderr);
+    }
+
+    /// <summary>Reads up to a limit; past it, stops the run (<paramref name="overflow"/>) or drops the rest, so a pipe never blocks the tool.</summary>
+    private static async Task<string> ReadCappedAsync(StreamReader reader, int limit, CancellationTokenSource? overflow)
+    {
+        var text = new System.Text.StringBuilder();
+        var buffer = new char[65536];
+        int read;
+        while ((read = await reader.ReadAsync(buffer, CancellationToken.None)) > 0)
+        {
+            if (text.Length + read <= limit)
+                text.Append(buffer, 0, read);
+            else
+                overflow?.Cancel();
+        }
+        return text.ToString();
     }
 
     private static string Tail(string text) =>

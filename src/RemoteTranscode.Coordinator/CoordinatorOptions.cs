@@ -140,6 +140,18 @@ public sealed class CoordinatorOptions
     [System.Text.Json.Serialization.JsonIgnore]
     public string? IssueReportToken { get; set; }
 
+    /// <summary>
+    /// Writes each report (title, then body) to this local file instead of sending it to GitHub, for the bench, which
+    /// has no token. Null in production. Nothing leaves the machine when it is set.
+    /// </summary>
+    public string? IssueReportFile { get; set; }
+
+    /// <summary>
+    /// Forces how far below a frame's time the runs set -ss and -t, in seconds, instead of half a frame
+    /// (EmbyConversionPlanner.SeekMargin). For the bench, which provokes a rejection with 0.001. Null in production.
+    /// </summary>
+    public double? EncodeSeekMarginSeconds { get; set; }
+
     /// <summary>The server as a report describes it: "Linux x64, Emby 4.10.2" (set by the Emby plugin).</summary>
     public string ServerDescription { get; set; } =
         $"{(OperatingSystem.IsWindows() ? "Windows" : OperatingSystem.IsLinux() ? "Linux" : OperatingSystem.IsMacOS() ? "macOS" : "other OS")} " +

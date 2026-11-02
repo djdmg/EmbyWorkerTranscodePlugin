@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Faux « ffprobe d'Emby » du banc local : lance le ffprobe amont et remet à 0 le start_time du format, comme le ffprobe
+       5.1 d'Emby sur un fichier dont le ffmpeg 9 des workers voit le début à 0,005 s (issue #3). Projet autonome. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>fake-emby-ffprobe</AssemblyName>
+    <RootNamespace>FakeEmbyFfprobe</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>
