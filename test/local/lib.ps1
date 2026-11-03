@@ -238,12 +238,12 @@ function Get-JobFfmpeg([string]$jobId) {
 
 # ---- Relais (remote-ffmpeg) -----------------------------------------------------------------------
 function Write-ShimConfig([string]$shimExe = $Paths.Shim, [string]$secretPath = (Join-Path $Paths.CoordDir 'data\shim.secret'),
-    [string]$realFfmpeg = $Paths.ServerFfmpeg, [double]$localFirstSeconds = 0, [bool]$useAudioAhead = $true) {
+    [string]$realFfmpeg = $Paths.ServerFfmpeg, [double]$localFirstSeconds = 0, [bool]$useAudioAhead = $true, [string]$realFfprobe = $Paths.ServerFfprobe) {
     $cfg = [ordered]@{
         CoordinatorUrl = "ws://127.0.0.1:$ShimPort/ws/shim"
         SecretPath     = $secretPath
         RealFfmpeg     = $realFfmpeg
-        RealFfprobe    = $Paths.ServerFfprobe
+        RealFfprobe    = $realFfprobe
         ToolsDirectory = $null
         # Le démarrage par le serveur suit les lignes SegmentComplete du ffmpeg d'Emby, absentes du ffmpeg amont du
         # banc : par défaut les tests partent directement sur un worker. Le relais shim-localfirst utilise le faux

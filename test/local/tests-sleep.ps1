@@ -174,9 +174,10 @@ function Compare-Conversions([string]$classic, [string]$ahead) {
             $problems += "audio#${i} : champs ffprobe différents ($($diff -join ', '))"
         }
     }
-    $fc = @($c.format.PSObject.Properties | Where-Object Name -in 'format_name', 'nb_streams', 'start_time', 'duration' | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ';'
-    $fa = @($a.format.PSObject.Properties | Where-Object Name -in 'format_name', 'nb_streams', 'start_time', 'duration' | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ';'
-    if ($fc -ne $fa) {
+    $fc = @($c.format.PSObject.Properties | Where-Object Name -in 'format_name', 'nb_streams', 'start_time' | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ';'
+    $fa = @($a.format.PSObject.Properties | Where-Object Name -in 'format_name', 'nb_streams', 'start_time' | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ';'
+    $dFormat = [math]::Abs([double]::Parse($c.format.duration, $inv) - [double]::Parse($a.format.duration, $inv)) * 1000
+    if ($fc -ne $fa -or $dFormat -gt 1) {
         $problems += "conteneur : $($c.format.format_name) $($c.format.start_time) $($c.format.duration) / $($a.format.format_name) $($a.format.start_time) $($a.format.duration)"
     }
     if ((Prop $c.format 'tags' | ConvertTo-Json -Compress) -ne (Prop $a.format 'tags' | ConvertTo-Json -Compress)) { $problems += 'étiquettes du conteneur différentes' }
@@ -846,6 +847,8 @@ function T27 {
         foreach ($variant in @(
                 @{ Id = 'a'; Options = @{ EncodeLocalAlongsideWorkers = $false; ServerFfprobe = $fakeProbe; EncodeSeekMarginSeconds = 0.02 }; Fixed = $false; Label = 'sans correction, tranches décalées rejetées, conversion refaite par Emby' },
                 @{ Id = 'b'; Options = @{ EncodeLocalAlongsideWorkers = $false; ServerFfprobe = $fakeProbe }; Fixed = $true; Label = 'avec correction, à l''image près' })) {
+            # Sur un vrai serveur, coordinateur et relais lisent le même ffprobe : le relais a donc aussi le faux.
+            Write-ShimConfig -realFfprobe $fakeProbe
             Restart-BenchCoordinator $variant.Options "coordinator-before-t27$($variant.Id)"
             Ensure-Workers @('w1', 'w2')
             $name = "t27$($variant.Id)"
@@ -862,7 +865,7 @@ function T27 {
             Add-Result "T27$($variant.Id)" "Source 25 i/s, début lu à 21 ms d'écart : $($variant.Label)" $(if ($ok) { 'PASS' } else { 'FAIL' }) (
                 "source : $($srcV.Frames) images, {0:0.000}s | sortie : $oText | contrôle : « $verify » | workers : $($r.Workers -join ', '), tranches serveur : $($r.LocalRuns) | « $assembled » | code $code" -f $srcV.Duration)
         }
-    } finally { Restart-BenchCoordinator @{} 'coordinator-t27' }
+    } finally { Write-ShimConfig; Restart-BenchCoordinator @{} 'coordinator-t27' }
     Ensure-Workers @('w1', 'w2')
 }
 # Preuve de concept : l'audio converti à l'avance sur plusieurs types de fichiers. Chaque source est convertie deux fois,
