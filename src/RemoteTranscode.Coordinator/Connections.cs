@@ -119,6 +119,12 @@ public sealed class WorkerConnection(PairedWorker identity, WebSocket socket, st
     public string RemoteAddress { get; } = remoteAddress;
     /// <summary>Capabilities announced at connection; a worker is never offered a job before it arrives.</summary>
     public WorkerHello? Hello { get; set; }
+    /// <summary>Why this worker gets no conversion slice (<see cref="ConversionWorkers"/>); null when it may get them or has not said hello.</summary>
+    public string? ConversionsRefused => Hello is { } hello ? ConversionWorkers.Refusal(hello.Version) : null;
+    /// <summary><see cref="ConversionsRefused"/> in French, for the conversions' notes and the plugin page.</summary>
+    public string? ConversionsRefusedLabel => Hello is { } hello ? ConversionWorkers.RefusalLabel(hello.Version) : null;
+    /// <summary>The refusal was logged for this connection; only the worker's receive loop uses it.</summary>
+    public bool ConversionRefusalLogged { get; set; }
     public WorkerHeartbeat? LastHeartbeat { get; set; }
     /// <summary>Time of the last message of any kind; the heartbeat loop drops the worker when it gets too old.</summary>
     public DateTimeOffset LastSeen { get; set; } = DateTimeOffset.UtcNow;
