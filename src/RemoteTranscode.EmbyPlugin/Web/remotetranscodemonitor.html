@@ -1,0 +1,52 @@
+<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/remotetranscodemonitorjs" data-title="Suivi du transcodage">
+    <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
+        <div class="rtm-page">
+            <style>
+                .rtm-page table { width: 100%; border-collapse: collapse; margin: .5em 0 1em; }
+                .rtm-page th, .rtm-page td { text-align: left; padding: .45em .6em; border-bottom: 1px solid rgba(128,128,128,.25); vertical-align: top; }
+                .rtm-page th { font-weight: 500; opacity: .7; white-space: nowrap; }
+                .rtm-page td { overflow-wrap: anywhere; }
+                .rtm-page .rtm-table { overflow-x: auto; }
+                .rtm-page .rtm-badge { display: inline-block; padding: .1em .55em; border-radius: 1em; font-size: .85em; color: #fff; white-space: nowrap; }
+                .rtm-page .rtm-muted { opacity: .65; font-size: .9em; }
+                .rtm-page .rtm-error { color: #e85c5c; }
+                .rtm-page .rtm-bar { height: .7em; margin: .5em 0 .3em; background: rgba(128,128,128,.25); border-radius: .3em; }
+                .rtm-page .rtm-bar > div { height: 100%; background: #52b54b; border-radius: .3em; }
+                .rtm-page .rtm-box { padding: .8em 1em; margin: .5em 0 1em; border-radius: .4em; background: rgba(128,128,128,.12); }
+                .rtm-page .rtm-title { font-weight: 500; font-size: 1.1em; overflow-wrap: anywhere; }
+            </style>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Suivi du transcodage distribué</h2>
+                <p class="rtm-updated rtm-muted">…</p>
+                <p class="rtm-status-error rtm-error"></p>
+                <p class="rtm-queue"></p>
+                <p class="rtm-refused"></p>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Workers</h2>
+                <div class="rtm-workers"></div>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Conversions en cours</h2>
+                <div class="rtm-current"></div>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Historique des conversions</h2>
+                <!-- What the coordinator keeps: encodes.json and the purge in EncodeQueue, the limit of its Status() in CoordinatorHost. -->
+                <p class="rtm-muted">Conservé sur le serveur : l'historique survit aux redémarrages d'Emby. Les conversions terminées depuis plus de 7 jours sont retirées à la capture suivante, et seules les 100 plus récentes sont affichées. Une conversion en cours pendant un redémarrage apparaît comme annulée. Une conversion refusée dès sa capture (commande non prise en charge, aucune machine capable) n'y figure pas : Emby la traite sur le serveur et la raison est dans son journal ffmpeg.</p>
+                <div class="rtm-history"></div>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Réglages</h2>
+                <label class="checkboxContainer"><input is="emby-checkbox" type="checkbox" class="chkAudioAhead" disabled /><span>Audio converti à l'avance</span></label>
+                <p class="rtm-audio-state rtm-muted">…</p>
+                <p class="rtm-muted">Pendant que les workers encodent la vidéo, le serveur convertit aussi l'audio (une conversion à la fois), avec les options d'Emby : l'assemblage n'a plus qu'à recopier les flux, au lieu de relire toute la source pour convertir l'audio. Utilisé seulement pour les commandes où le fichier obtenu est le même ; sinon, ou si cet audio n'est pas prêt ou est rejeté par le contrôle, l'assemblage convertit l'audio comme d'habitude. Expérimental et désactivé par défaut, le temps de valider la synchronisation audio/vidéo. S'applique sans redémarrage aux conversions capturées ensuite ; celles déjà en cours ne changent pas.</p>
+            </div>
+        </div>
+    </div>
+</div>

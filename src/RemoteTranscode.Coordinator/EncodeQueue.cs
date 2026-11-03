@@ -129,6 +129,8 @@ public sealed class EncodeTask
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     public string? Error { get; set; }
     public string? Note { get; set; }
+    /// <summary>The shim's check line of the last assembly (source and result video spans), for the status page and the history.</summary>
+    public string? Check { get; set; }
     public SourceInfo? Source { get; set; }
     public List<EncodeSlice> Slices { get; set; } = [];
     /// <summary>Mutated under the queue's lock only; enumerate it under that lock too.</summary>
@@ -790,8 +792,11 @@ public sealed partial class EncodeQueue : IJobOwner
                 return;
             task.Status = done.Success ? EncodeStatus.Completed : EncodeStatus.Failed;
             task.Error = done.Error;
+            task.Check = done.Check;
             if (audioRun?.Task == task)
                 KillAudio(audioRun, "conversion terminée");
+            if (done.AudioAheadRejected != null)
+                task.Audio = $"audio converti à l'avance rejeté à l'assemblage ({done.AudioAheadRejected}), converti à l'assemblage";
             task.Percent = done.Success ? 100 : task.Percent;
             task.Speed = 0;
             Touch(task, done.Success ? "assemblé et vérifié par le serveur" : "échec de l'assemblage");
