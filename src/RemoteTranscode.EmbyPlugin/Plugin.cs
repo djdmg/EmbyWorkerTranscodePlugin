@@ -65,6 +65,19 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             Name = "remotetranscode" + PageSuffix + "js",
             EmbeddedResourcePath = GetType().Namespace + ".Web.remotetranscode.js",
         },
+        new PluginPageInfo
+        {
+            Name = "remotetranscodemonitor" + PageSuffix,
+            DisplayName = "Suivi du transcodage",
+            EmbeddedResourcePath = GetType().Namespace + ".Web.remotetranscodemonitor.html",
+            EnableInMainMenu = true,
+            MenuIcon = "assessment",
+        },
+        new PluginPageInfo
+        {
+            Name = "remotetranscodemonitor" + PageSuffix + "js",
+            EmbeddedResourcePath = GetType().Namespace + ".Web.remotetranscodemonitor.js",
+        },
     ];
 }
 
@@ -103,7 +116,7 @@ public sealed class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>
     /// Converts a conversion's audio ahead on the server (CoordinatorOptions.EncodeAudioAhead). Off until validated on
-    /// a real server; no switch on the page, set through POST /RemoteTranscode/AudioAhead.
+    /// a real server; switched on the monitoring page, through POST /RemoteTranscode/AudioAhead.
     /// </summary>
     public bool EncodeAudioAhead { get; set; } = false;
 }

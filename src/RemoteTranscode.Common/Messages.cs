@@ -212,9 +212,11 @@ public sealed record ConversionFailed(string TaskId, string Reason) : Message;
 
 /// <summary>
 /// The shim reports the outcome of the assembly so the coordinator can clean up. <paramref name="Check"/>: the check
-/// line (source and result video spans), when the check got that far; used by the failure reports.
+/// line (source and result video spans), when the check got that far; used by the failure reports and the monitoring
+/// page. <paramref name="AudioAheadRejected"/>: why the assembly with the audio converted ahead was rejected before this
+/// verdict's usual assembly ran; that rejection would otherwise only be in Emby's ffmpeg log.
 /// </summary>
-public sealed record ConversionDone(string TaskId, bool Success, string? Error, string? Check = null) : Message;
+public sealed record ConversionDone(string TaskId, bool Success, string? Error, string? Check = null, string? AudioAheadRejected = null) : Message;
 
 public static class MessageJson
 {

@@ -108,6 +108,7 @@ public sealed class ConversionSession : IDisposable
         // Same split as the coordinator made (it already checked the input against the allowed roots, hence "/").
         var plan = EmbyConversionPlanner.Plan(args, ["/"]);
         string listFile = ready.ListFile;
+        string? audioAheadRejected = null;
         if (ready.AudioFile != null && ready.AudioOffset != null && plan.AudioAhead != null && config.UseAudioAhead)
         {
             string[] ahead = EmbyConversionPlanner.WithVideoOffset(plan.AudioAhead.Assembly(ready.AudioFile, ready.AudioOffset), ready.VideoOffset)
@@ -122,6 +123,7 @@ public sealed class ConversionSession : IDisposable
                 return first.Code;
             }
             // The chunks are fine: the usual assembly converts the audio itself.
+            audioAheadRejected = first.Problem;
             err.Line($"remote-transcode: assemblage avec l'audio converti à l'avance rejeté ({first.Problem}), assemblage avec conversion de l'audio");
             try { File.Delete(plan.Output); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
@@ -133,7 +135,7 @@ public sealed class ConversionSession : IDisposable
         var (code, problem, quit, quitLate) = await RunAssemblyAsync(assembly, plan, null);
         if (quit)
             return code;
-        await SendDoneAsync(new ConversionDone(taskId, problem is null, problem, lastCheck));
+        await SendDoneAsync(new ConversionDone(taskId, problem is null, problem, lastCheck, audioAheadRejected));
         // A 'q' during verification still reaches the finished assembly run (it owns stdin until the next start).
         if (problem is null || quitRequested || quitLate)
             return code;

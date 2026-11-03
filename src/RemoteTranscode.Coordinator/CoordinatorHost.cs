@@ -287,7 +287,7 @@ public static class CoordinatorHost
                 encodes = encodes.Summaries(100),
                 // Emby's conversion queue (queued or converting), null when the server cannot tell.
                 queueRemaining = encodes.QueueRemaining(),
-                settings = new { options.PublicUrl, options.OffloadInputPattern, options.EncodeLocalFallback, options.PlaybackPriority },
+                settings = options.StatusSettings(),
             };
         }
 

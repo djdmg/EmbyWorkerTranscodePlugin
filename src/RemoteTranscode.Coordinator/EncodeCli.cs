@@ -43,6 +43,7 @@ public static class EncodeCli
         t.Audio,
         t.Note,
         t.Error,
+        t.Check,
         t.CreatedAt,
         t.UpdatedAt,
     };

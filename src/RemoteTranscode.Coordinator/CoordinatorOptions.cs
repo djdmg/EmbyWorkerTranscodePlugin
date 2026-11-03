@@ -169,6 +169,9 @@ public sealed class CoordinatorOptions
     /// <summary>Subject alternative names (IPs or host names) for the generated TLS certificate.</summary>
     public string[] CertificateNames { get; set; } = ["localhost"];
 
+    /// <summary>The settings shown in the status (camelCased by the JSON answer); only what an administrator may see.</summary>
+    public object StatusSettings() => new { PublicUrl, OffloadInputPattern, EncodeLocalFallback, PlaybackPriority, EncodeAudioAhead };
+
     public string CertificatePath => Path.Combine(DataDir, "coordinator.pfx");
     public string CertificatePemPath => Path.Combine(DataDir, "coordinator.pem");
     public string WorkersPath => Path.Combine(DataDir, "workers.json");

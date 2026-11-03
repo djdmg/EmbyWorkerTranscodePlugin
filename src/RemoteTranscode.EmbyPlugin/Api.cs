@@ -200,6 +200,7 @@ public sealed class RemoteTranscodeApi : IService, IRequiresRequest
             // Whether this build has a report token, never the token itself.
             ("reportFailures", Config.ReportFailures ? "true" : "false"),
             ("reportFailuresState", !Runtime.HasIssueReportToken ? "notoken" : Config.ReportFailures ? "active" : "disabled"),
+            ("encodeAudioAhead", Config.EncodeAudioAhead ? "true" : "false"),
         }), "application/json");
     }
 
