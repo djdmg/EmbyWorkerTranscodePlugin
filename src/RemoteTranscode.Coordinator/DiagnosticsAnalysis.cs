@@ -322,13 +322,17 @@ public static partial class DiagnosticsAnalysis
         return stats?.FrameSeconds;
     }
 
-    /// <summary>Per-slice summary of what was listed and measured. Chunks without a measure give no frame count for their slice.</summary>
+    /// <summary>
+    /// Per-slice summary of what was listed and measured. Chunks without a measure give no frame count for their slice. Under Emby's -r
+    /// (<paramref name="outputFrame"/>) a run holds one frame per tick of its grid, whatever the source's frames: a variable source's frames are
+    /// not what to expect (a real slice of 3019 frames, 3014 in the source, was 2 ticks too long and ended 80 ms late, not 5 frames).
+    /// </summary>
     public static IReadOnlyList<SliceMeasure> Slices(IReadOnlyList<DiagnosticSlice> slices, IReadOnlyDictionary<int, ChunkMeasure> chunks,
-        SourceFingerprint? fingerprint, PacketStats? stats, StreamEnds? ends, IReadOnlyDictionary<int, int>? sourceFrames)
+        SourceFingerprint? fingerprint, PacketStats? stats, StreamEnds? ends, IReadOnlyDictionary<int, int>? sourceFrames, double? outputFrame = null)
     {
-        double? output = OutputFrame(chunks.Values) ?? SourceFrame(fingerprint, stats);
+        double? output = outputFrame ?? OutputFrame(chunks.Values) ?? SourceFrame(fingerprint, stats);
         double start = fingerprint?.Start ?? 0;
-        bool variable = stats?.ConstantRate == false;
+        bool variable = stats?.ConstantRate == false && outputFrame is null;
         var result = new List<SliceMeasure>(slices.Count);
         foreach (var s in slices.OrderBy(x => x.Number))
         {

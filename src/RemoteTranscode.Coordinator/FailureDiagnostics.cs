@@ -90,6 +90,8 @@ public sealed record DiagnosticsRequest
     public string? AudioState { get; init; }
     public string? AudioOffset { get; init; }
     public double? SeekMargin { get; init; }
+    /// <summary>Frame time set by Emby's -r, null without.</summary>
+    public double? OutputFrame { get; init; }
 }
 
 public enum DiagnosticsStatus
@@ -232,12 +234,12 @@ public sealed class FailureDiagnostics(ToolRunner ffprobe, ToolRunner ffmpeg, Ti
         if (r.SpoolDir is { } spool)
         {
             await MeasureChunksAsync(r, spool, s, token);
-            // A variable frame rate gives no expected count from a length: the source's frames are counted.
-            if (s.Stats?.ConstantRate == false && r.Slices.Count > 0)
+            // A variable frame rate gives no expected count from a length, unless Emby's -r sets a grid: the source's frames are counted.
+            if (s.Stats?.ConstantRate == false && r.OutputFrame is null && r.Slices.Count > 0)
                 await Step(s, "source frames per slice", token, async () =>
                     s.SourceFrames = DiagnosticsAnalysis.CountSourceFrames(await Probe(AllPtsArgs(r.SourcePath), token), s.Fingerprint?.Start ?? 0, r.Slices));
         }
-        var measures = DiagnosticsAnalysis.Slices(r.Slices, s.Chunks, s.Fingerprint, s.Stats, s.Ends, s.SourceFrames);
+        var measures = DiagnosticsAnalysis.Slices(r.Slices, s.Chunks, s.Fingerprint, s.Stats, s.Ends, s.SourceFrames, r.OutputFrame);
         var times = DiagnosticsAnalysis.PickBoundaries(measures, MaxBoundaries);
         if (times.Count > 0)
             await Step(s, "frames around slice boundaries", token, async () =>
@@ -328,7 +330,7 @@ public sealed class FailureDiagnostics(ToolRunner ffprobe, ToolRunner ffmpeg, Ti
         var notes = new List<string>(s.Notes);
         try
         {
-            slices = DiagnosticsAnalysis.Slices(r.Slices, s.Chunks, s.Fingerprint, s.Stats, s.Ends, s.SourceFrames);
+            slices = DiagnosticsAnalysis.Slices(r.Slices, s.Chunks, s.Fingerprint, s.Stats, s.Ends, s.SourceFrames, r.OutputFrame);
             verdict = DiagnosticsAnalysis.Decide(r.Kind, r.Error, r.Check, slices, s.Fingerprint, s.Stats, s.Ends, r.SpoolDir != null, status == DiagnosticsStatus.Completed);
             recipe = s.Fingerprint is null ? null : RecipeBuilder.Build(s.Fingerprint, s.Stats, s.Ends);
         }
