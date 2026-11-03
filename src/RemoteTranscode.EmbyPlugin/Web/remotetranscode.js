@@ -220,7 +220,8 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-select', 'emby
             var seen = w.lastSeen ? new Date(w.lastSeen).toLocaleTimeString() : '—';
             return '<tr><td><b>' + esc(w.name) + '</b><div class="rt-muted">' + esc(w.remoteAddress || '') + '</div></td>' +
                 '<td>' + badge(StateLabels, w.state) + (w.reason ? '<div class="rt-muted">' + esc(w.reason) + '</div>' : '') +
-                (w.backgroundPaused ? '<div class="rt-muted">conversions suspendues pendant les lectures</div>' : '') + '</td>' +
+                (w.backgroundPaused ? '<div class="rt-muted">conversions suspendues pendant les lectures</div>' : '') +
+                (w.conversionsRefusedLabel ? '<div class="rt-muted">' + esc(w.conversionsRefusedLabel) + '</div>' : '') + '</td>' +
                 '<td>' + esc(w.jobs) + ' / ' + esc(w.maxJobs) + '<div class="rt-muted">dont ' + esc(w.playbacks) + ' lecture(s)</div></td>' +
                 '<td class="rt-muted">' + load + '</td><td>' + caps + '</td><td class="rt-muted">' + esc(seen) + '</td>' +
                 '<td><button is="emby-button" type="button" class="raised" data-action="revoke" data-id="' + esc(w.id) + '"><span>Révoquer</span></button></td></tr>';

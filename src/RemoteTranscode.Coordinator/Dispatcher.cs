@@ -321,7 +321,9 @@ public sealed class Dispatcher(CoordinatorOptions options, ILogger<Dispatcher> l
 
     /// <summary>
     /// A worker qualifies only if it reported itself available, its heartbeat is recent, it has a free slot and it can
-    /// run this job (encoder, filters). The best scored one wins (<see cref="WorkerMatching.Score"/>); its slot is
+    /// run this job (encoder, filters; for a conversion slice, its version too: <see cref="ConversionWorkers"/>, checked
+    /// here because every job goes through here, and before the exclusions so the refusal always shows in the reason).
+    /// The best scored one wins (<see cref="WorkerMatching.Score"/>); its slot is
     /// reserved before the offer leaves. When nobody qualifies, the reason is returned for the logs.
     /// </summary>
     private (WorkerConnection? Worker, string? Reason) PickWorker(JobPlan plan, JobKind kind, HashSet<string> excluded, bool reserve = true)
@@ -334,7 +336,14 @@ public sealed class Dispatcher(CoordinatorOptions options, ILogger<Dispatcher> l
         foreach (var w in workers.Values)
         {
             string name = w.Identity.Name;
-            if (excluded.Contains(w.Identity.Id) || !w.IsOpen || w.Hello is null)
+            if (!w.IsOpen || w.Hello is null)
+                continue;
+            if (kind == JobKind.Background && w.ConversionsRefusedLabel is { } refused)
+            {
+                reasons.Add($"{name}: {refused}");
+                continue;
+            }
+            if (excluded.Contains(w.Identity.Id))
                 continue;
             // "Busy" means all slots are used; for a playback, slots held by background encodes do not count.
             bool usable = w.State == WorkerState.Available || (kind == JobKind.Playback && w.State == WorkerState.Busy);
@@ -363,12 +372,16 @@ public sealed class Dispatcher(CoordinatorOptions options, ILogger<Dispatcher> l
         return (null, reasons.Count == 0 ? "no worker connected" : "no available worker: " + string.Join("; ", reasons));
     }
 
-    /// <summary>True when some worker could take a job with these requirements right now (nothing is reserved).</summary>
+    /// <summary>
+    /// True when some worker could take a job with these requirements right now (nothing is reserved). A background job
+    /// counts only the workers allowed to convert: a local run must not stop to hand over to a worker that refuses it.
+    /// </summary>
     public bool HasCapacityFor(JobRequirements requirements, JobKind kind = JobKind.Background, IReadOnlyCollection<string>? excluded = null)
     {
         var now = DateTimeOffset.UtcNow;
         return workers.Values.Any(w => w.IsOpen && w.Hello != null && excluded?.Contains(w.Identity.Id) != true
             && (w.State == WorkerState.Available || (kind == JobKind.Playback && w.State == WorkerState.Busy))
+            && (kind != JobKind.Background || w.ConversionsRefused is null)
             && now - w.LastSeen < TimeSpan.FromSeconds(options.HeartbeatTimeoutSeconds)
             && w.HasRoomFor(kind)
             && WorkerMatching.Incompatibility(requirements, w.Hello.Capabilities) is null);
@@ -381,12 +394,24 @@ public sealed class Dispatcher(CoordinatorOptions options, ILogger<Dispatcher> l
     public bool HasWorkerFor(JobRequirements requirements) =>
         ConnectedCapabilities().Any(c => WorkerMatching.Incompatibility(requirements, c) is null);
 
-    /// <summary>Capabilities of the workers connected now (whatever their state), as <see cref="HasWorkerFor"/> counts them.</summary>
+    /// <summary>
+    /// Capabilities of the workers connected now (whatever their state) that may encode conversion slices, as
+    /// <see cref="HasWorkerFor"/> counts them: a worker too old for conversions is nobody to wait for, and no reason to
+    /// choose GPU tone mapping.
+    /// </summary>
     public IReadOnlyList<WorkerCapabilities> ConnectedCapabilities()
     {
         var now = DateTimeOffset.UtcNow;
-        return workers.Values.Where(w => w.IsOpen && w.Hello != null
+        return workers.Values.Where(w => w.IsOpen && w.Hello != null && w.ConversionsRefused is null
             && now - w.LastSeen < TimeSpan.FromSeconds(options.HeartbeatTimeoutSeconds)).Select(w => w.Hello!.Capabilities).ToList();
+    }
+
+    /// <summary>The connected workers refused conversions and why, for a conversion's note; null when there are none.</summary>
+    public string? ConversionRefusals()
+    {
+        var refused = workers.Values.Where(w => w.IsOpen && w.ConversionsRefusedLabel != null)
+            .Select(w => $"{w.Identity.Name} : {w.ConversionsRefusedLabel}").ToList();
+        return refused.Count == 0 ? null : string.Join("; ", refused);
     }
 
     /// <summary>
@@ -589,6 +614,11 @@ public sealed class Dispatcher(CoordinatorOptions options, ILogger<Dispatcher> l
                 {
                     logger.LogInformation("Worker {Id} renamed {Old} -> {New}", worker.Identity.Id, worker.Identity.Name, name);
                     worker.Identity = renamed;
+                }
+                if (worker.ConversionsRefused is { } refusal && !worker.ConversionRefusalLogged)
+                {
+                    worker.ConversionRefusalLogged = true;
+                    logger.LogWarning("Worker {Name} gets no conversion slices ({Refusal}): update it; it still runs playbacks", worker.Identity.Name, refusal);
                 }
                 logger.LogInformation("Worker {Name}: ffmpeg {Version}, encoders [{Encoders}], max {Max} jobs, {State}",
                     worker.Identity.Name, hello.Capabilities.FfmpegVersion, string.Join(",", hello.Capabilities.VideoEncoders), hello.MaxJobs, hello.State);

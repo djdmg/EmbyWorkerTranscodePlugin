@@ -275,6 +275,8 @@ public static class CoordinatorHost
                         Gpus = w?.Hello?.Capabilities.Gpus,
                         Ffmpeg = w?.Hello?.Capabilities.FfmpegVersion,
                         Version = w?.Hello?.Version,
+                        ConversionsRefused = w?.ConversionsRefused,
+                        ConversionsRefusedLabel = w?.ConversionsRefusedLabel,
                     };
                 }),
                 jobs = dispatcher.Jobs.OrderByDescending(j => j.CreatedAt).Take(50).Select(j => new

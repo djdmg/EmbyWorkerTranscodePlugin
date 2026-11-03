@@ -1009,7 +1009,8 @@ public sealed partial class EncodeQueue : IJobOwner
                 return true;
             var busy = BusyWorkers(task);
             var ending = EndingWorkers(task);
-            var connected = dispatcher.Workers.Where(w => w.IsOpen && w.Hello != null).Select(w => w.Identity.Id).ToHashSet();
+            // Without the workers refused conversions: a slice reserved for one (it came back with an older version) is released.
+            var connected = dispatcher.Workers.Where(w => w.IsOpen && w.Hello != null && w.ConversionsRefused is null).Select(w => w.Identity.Id).ToHashSet();
             if (slice.ReservedFor is { } reservee)
             {
                 bool othersLeft = task.Slices.Any(s => s != slice && !s.Done && !s.IsRunning && s.ReservedFor is null);
@@ -1428,7 +1429,7 @@ public sealed partial class EncodeQueue : IJobOwner
                 && DateTimeOffset.UtcNow - since >= TimeSpan.FromMinutes(options.EncodeNoWorkerMinutes))
                 await GiveUpAsync(task, dispatcher.HasWorkerFor(plan.Requirements!)
                     ? $"aucun worker n'a pu reprendre la conversion pendant {options.EncodeNoWorkerMinutes} min, et le serveur ne peut pas encoder ces morceaux"
-                    : "plus aucun worker capable connecté, et le serveur ne peut pas encoder ces morceaux", report: false);
+                    : $"plus aucun worker capable connecté{(dispatcher.ConversionRefusals() is { } refused ? $" ({refused})" : "")}, et le serveur ne peut pas encoder ces morceaux", report: false);
             return;
         }
 
@@ -1483,7 +1484,7 @@ public sealed partial class EncodeQueue : IJobOwner
             task.DiagnosticsLog.RunStarted(slice.Index, plan.StartIndex > slice.FirstChunk);
             Touch(task, alongside
                 ? $"tranche {slice.Index + 1}/{task.Slices.Count} encodée sur le serveur en parallèle des workers, à partir de {startSeconds:0}s"
-                : $"aucun worker : tranche {slice.Index + 1}/{task.Slices.Count} encodée sur le serveur à partir de {startSeconds:0}s");
+                : $"aucun worker{(dispatcher.ConversionRefusals() is { } refused ? $" ({refused})" : "")} : tranche {slice.Index + 1}/{task.Slices.Count} encodée sur le serveur à partir de {startSeconds:0}s");
         }
         Process process;
         try
@@ -2204,7 +2205,7 @@ public sealed partial class EncodeQueue : IJobOwner
             task.SetAsideBlockedSince = null;
             return;
         }
-        bool setAsideConnected = dispatcher.Workers.Any(w => w.IsOpen && w.Hello != null && task.FailedWorkers.Contains(w.Identity.Id)
+        bool setAsideConnected = dispatcher.Workers.Any(w => w.IsOpen && w.Hello != null && w.ConversionsRefused is null && task.FailedWorkers.Contains(w.Identity.Id)
             && WorkerMatching.Incompatibility(task.Requirements, w.Hello.Capabilities) is null);
         if (!setAsideConnected)
         {
