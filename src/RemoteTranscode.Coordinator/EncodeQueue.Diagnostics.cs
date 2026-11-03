@@ -24,7 +24,7 @@ public sealed partial class EncodeQueue
             var slices = task.Slices.OrderBy(s => s.Index).Select(s =>
             {
                 var durations = task.ConcatDurations(s).ToDictionary(d => d.Index, d => d.Duration);
-                var chunks = task.Chunks.Where(c => c.Index >= s.FirstChunk && c.Index < s.FirstChunk + EmbyConversionPlanner.ChunksPerSlice)
+                var chunks = task.Chunks.Where(c => c.Index >= s.FirstChunk && c.Index < s.ChunkLimit)
                     .OrderBy(c => c.Index)
                     .Select(c => new DiagnosticChunk(c.Index, c.Start, c.End, durations.TryGetValue(c.Index, out double d) ? d : null, c.Size))
                     .ToList();

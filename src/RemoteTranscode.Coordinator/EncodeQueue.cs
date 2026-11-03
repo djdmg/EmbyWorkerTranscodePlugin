@@ -121,6 +121,9 @@ public sealed class EncodeSlice
 
     [JsonIgnore]
     public int FirstChunk => Index * EmbyConversionPlanner.ChunksPerSlice;
+
+    /// <summary>The first chunk number past this slice. The last slice has no next one: alone, a whole file can take more than 100 chunks (50 min).</summary>
+    public int ChunkLimit => Last ? int.MaxValue : FirstChunk + EmbyConversionPlanner.ChunksPerSlice;
 }
 
 /// <summary>One Emby conversion handed over by the shim: its video is encoded in chunks, the shim assembles the result.</summary>
@@ -274,7 +277,7 @@ public sealed class EncodeTask
     /// </summary>
     public void ShiftRun(EncodeSlice slice, double correction)
     {
-        int end = slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice;
+        int end = slice.ChunkLimit;
         for (int i = 0; i < Chunks.Count; i++)
         {
             var c = Chunks[i];
@@ -327,7 +330,7 @@ public sealed class EncodeTask
     {
         if (EncodedEnd(slice) >= slice.RunStartSeconds + MinRunProgressSeconds)
             return false;
-        Chunks.RemoveAll(c => c.Index >= slice.RunStartIndex && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice);
+        Chunks.RemoveAll(c => c.Index >= slice.RunStartIndex && c.Index < slice.ChunkLimit);
         return true;
     }
 
@@ -361,7 +364,7 @@ public sealed class EncodeTask
     public int ContiguousChunks(EncodeSlice slice)
     {
         int n = 0;
-        foreach (var c in Chunks.Where(c => c.Index >= slice.FirstChunk && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice).OrderBy(c => c.Index))
+        foreach (var c in Chunks.Where(c => c.Index >= slice.FirstChunk && c.Index < slice.ChunkLimit).OrderBy(c => c.Index))
         {
             if (c.Index != slice.FirstChunk + n)
                 break;
@@ -1090,7 +1093,7 @@ public sealed partial class EncodeQueue : IJobOwner
             }
             // Chunks that do not follow each other cannot be resumed from: the slice starts over.
             if (!task.Consistent(slice))
-                task.Chunks.RemoveAll(c => c.Index >= slice.FirstChunk && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice);
+                task.Chunks.RemoveAll(c => c.Index >= slice.FirstChunk && c.Index < slice.ChunkLimit);
             startIndex = slice.FirstChunk + task.ContiguousChunks(slice);
             startSeconds = task.EncodedEnd(slice);
             // Resumed from the source frame where the previous run ended, not from its listed time (still the same).
@@ -1115,7 +1118,7 @@ public sealed partial class EncodeQueue : IJobOwner
             if (next != null)
                 plan = plan with { Prefetch = [new ByteRange(next.ByteStart!.Value, Math.Min(next.ByteEnd!.Value, inputSize) - next.ByteStart.Value)] };
             // Claimed: no second run can start for this slice. Chunks past the resume point belong to an older run.
-            task.Chunks.RemoveAll(c => c.Index >= startIndex && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice);
+            task.Chunks.RemoveAll(c => c.Index >= startIndex && c.Index < slice.ChunkLimit);
             slice.ForgetRunsFrom(startIndex);
             slice.Worker = OfferMarker;
             slice.JobId = null;
@@ -2064,7 +2067,7 @@ public sealed partial class EncodeQueue : IJobOwner
         {
             (task, slice) = SliceOf(job);
             if (task is null || slice is null
-                || index < slice.FirstChunk || index >= slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice)
+                || index < slice.FirstChunk || index >= slice.ChunkLimit)
                 return false;
         }
         Directory.CreateDirectory(SpoolDir(task.Id));
@@ -2600,7 +2603,7 @@ public sealed partial class EncodeQueue : IJobOwner
         {
             // The length each chunk was given in the concat list (empty past a gap: not assembled).
             var durations = task.ConcatDurations(slice).ToDictionary(d => d.Index, d => d.Duration);
-            foreach (var c in task.Chunks.Where(c => c.Index >= slice.FirstChunk && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice).OrderBy(c => c.Index))
+            foreach (var c in task.Chunks.Where(c => c.Index >= slice.FirstChunk && c.Index < slice.ChunkLimit).OrderBy(c => c.Index))
                 table.Append(CultureInfo.InvariantCulture, $"{slice.Index + 1},{slice.Start:0.######},{slice.End:0.######},{c.Index},{c.Start:0.######},{c.End:0.######},{(durations.TryGetValue(c.Index, out double d) ? d.ToString("0.######", CultureInfo.InvariantCulture) : "")}\n");
         }
         try

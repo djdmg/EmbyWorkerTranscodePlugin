@@ -29,6 +29,14 @@ public class SliceChunkTests
     }
 
     [Fact]
+    public void Only_the_last_slice_may_take_more_chunks_than_the_numbers_reserved_per_slice()
+    {
+        // A whole AVI of 57 min in one slice stopped at chunk 100: 3000 s of 3424 s, rejected at the end.
+        Assert.True(new EncodeSlice { Index = 0, Start = 0, End = 3424.8, Last = true }.ChunkLimit > 114);
+        Assert.Equal(200, new EncodeSlice { Index = 1, Start = 120, End = 240 }.ChunkLimit);
+    }
+
+    [Fact]
     public void A_run_with_a_moved_seek_goes_back_to_the_servers_times()
     {
         // Worker's ffmpeg reads the file 21 ms later than the server's: it lists its chunks 21 ms under the server's times.

@@ -8,6 +8,14 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.37 — 2026-11-03
+
+Built and published by GitHub Actions (release v0.7.37). Worker unchanged (0.7.20).
+
+### Fixed
+
+- **Plugin** — A conversion in one slice (AVI without presentation times, MPEG-TS) stopped at 100 chunks, 50 minutes: 3000 s of a 3424 s AVI, measured on a real file. The check rejected it and Emby converted the file. The last slice no longer has that limit.
+
 ## Plugin 0.7.36 and worker 0.7.20 — 2026-11-03
 
 Built and published by GitHub Actions (release v0.7.36). Workers need 0.7.19 at least to receive conversion slices. Worker 0.7.20 is the first one that can update itself: going from an older worker to 0.7.20 is done by hand, once.

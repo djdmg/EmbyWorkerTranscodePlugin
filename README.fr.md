@@ -124,7 +124,7 @@ Les versions se règlent dans `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.Em
 
 | Élément | Version |
 |---|---|
-| Plugin | 0.7.36 |
+| Plugin | 0.7.37 |
 | Worker et installeur | 0.7.20, avec icône, décodage et tone mapping par le GPU (Resizable BAR nécessaire sur les cartes NVIDIA et AMD), journaux gardés 7 jours (build FFmpeg « full » : installeur d'environ 218 Mo au lieu de 170 Mo), mise à jour automatique |
 | Worker minimal | 0.7.19 pour les conversions : un worker plus ancien, ou de version inconnue, ne reçoit aucune tranche et assure toujours les lectures. Le refus apparaît dans l'API de statut, sur les pages du plugin et de suivi et dans le journal. |
 | Emby Server testé | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 sans GPU) ; ffmpeg d'Emby 5.1 (fork) |
