@@ -25,4 +25,20 @@
     <ProjectReference Include="..\RemoteTranscode.Coordinator\RemoteTranscode.Coordinator.csproj" />
   </ItemGroup>
 
+  <!-- The installer is net8.0-windows, so its one tested class is compiled here rather than referenced. -->
+  <ItemGroup>
+    <Compile Include="..\RemoteTranscode.Installer\LockedFileRetry.cs" Link="Installer\LockedFileRetry.cs" />
+  </ItemGroup>
+
+  <!--
+    Build-order references only: the tests do not use these programs, but "dotnet test" must fail when one of them does
+    not compile instead of leaving that to the release build. No assembly reference, no target framework negotiation
+    (Worker and Installer are net8.0-windows), nothing copied next to the tests.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\RemoteTranscode.Shim\RemoteTranscode.Shim.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" Private="false" />
+    <ProjectReference Include="..\RemoteTranscode.Worker\RemoteTranscode.Worker.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" Private="false" />
+    <ProjectReference Include="..\RemoteTranscode.Installer\RemoteTranscode.Installer.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" Private="false" />
+  </ItemGroup>
+
 </Project>
