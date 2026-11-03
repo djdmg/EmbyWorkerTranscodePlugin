@@ -922,6 +922,67 @@ function T29 {
         "source vidéo {0:0.000} audio {1:0.000} | sortie vidéo {2:0.000} audio {3:0.000} | différence {4:0.0} ms | code $code" -f $sv, $sa, $ov, $oa, $gap)
 }
 
+# Contrôle de synchro sur tout le fichier. T30a/b : assemblage vraiment désynchronisé, la durée listée d'un morceau au milieu de la
+# liste corrigée de 12 ms (sous la demi-image : le contrôle précédent livrait ce fichier) puis 200 ms, tout ce qui suit est décalé.
+# Le contrôle rejette, la commande d'Emby refait la conversion, et le fichier livré a toutes ses images et son écart audio-vidéo.
+# T30c : AVI MPEG-4 à B-frames compactées et MP3 ; T30d : MPEG-TS de 300 s (une seule tranche, sans seek). Conversions propres, pas de
+# rejet, et la vidéo commence où le décodeur donne la première image.
+#   pwsh -File run-tests.ps1 -Only T30
+function First-Decoded-Frame([string]$file) {
+    $v = @(& $Paths.ServerFfprobe -v error -select_streams v:0 -read_intervals '%+#32' -show_entries frame=best_effort_timestamp_time -of csv=p=0 $file) |
+        ForEach-Object { "$_".Split(',')[0] } | Where-Object { $_ -and $_ -ne 'N/A' } | ForEach-Object { [double]::Parse($_, [cultureinfo]::InvariantCulture) } | Measure-Object -Minimum
+    $start = [double]::Parse("$(& $Paths.ServerFfprobe -v error -show_entries format=start_time -of csv=p=0 $file)".Trim(), [cultureinfo]::InvariantCulture)
+    $v.Minimum - $start
+}
+
+function New-T30Source([string]$name, [string[]]$video, [string]$audioCodec, [int]$seconds) {
+    $dst = Join-Path $Paths.Media $name
+    if (-not (Test-Path $dst)) {
+        & $Paths.WorkerFfmpeg -y -hide_banner -v error -t $seconds -f lavfi -i 'testsrc2=size=640x360:rate=25' -t $seconds -f lavfi -i 'sine=frequency=440:sample_rate=48000' -map 0:v -map 1:a @video -pix_fmt yuv420p -c:a $audioCodec $dst
+        if ($LASTEXITCODE) { throw "génération de $name en échec" }
+    }
+    $dst
+}
+
+function T30 {
+    $x264 = @('-c:v', 'libx264', '-preset', 'ultrafast', '-g', '48')
+    $film = New-T30Source 't30_film.mkv' $x264 'ac3' 200
+    $srcV = Measure-Video $film
+    try {
+        foreach ($variant in @(@{ Id = 'a'; Shift = 0.012; Label = '12 ms de trop dans un morceau' }, @{ Id = 'b'; Shift = 0.2; Label = '200 ms de trop dans un morceau' })) {
+            Restart-BenchCoordinator @{ EncodeTestListedDurationShift = $variant.Shift } "coordinator-before-t30$($variant.Id)"
+            Ensure-Workers @('w1', 'w2')
+            $name = "t30$($variant.Id)"
+            $out = Join-Path $Paths.Out "conv-$name.mp4"
+            $s = Start-Shim (New-ConversionArgs -InputPath $film -OutputPath $out -Rate '25') $name
+            $code = Wait-Exit $s 1800
+            $outV = if (Test-Path $out) { Measure-Video $out } else { $null }
+            $verify = Log-Excerpt "shim-$name" 'rejet' 2
+            $sa = [double]::Parse("$(& $Paths.ServerFfprobe -v error -select_streams a:0 -show_entries stream=start_time -of csv=p=0 $film)".Trim().Split(',')[0], [cultureinfo]::InvariantCulture)
+            $gap = if ($outV) { [math]::Abs(((First-Pts $out 'a:0') + 1024 / 48000 - (First-Pts $out 'v:0')) - ($sa - (First-Pts $film 'v:0'))) * 1000 } else { -1 }
+            $ok = $code -eq 0 -and ($verify -join ' ') -match 'rejet' -and (Prop (Encode-Summary $out) 'Status') -eq 'Failed' -and $outV -and $outV.Frames -eq $srcV.Frames -and $gap -ge 0 -and $gap -le 1
+            Add-Result "T30$($variant.Id)" "Assemblage désynchronisé ($($variant.Label)) : rejeté, fichier livré correct" $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+                "source $($srcV.Frames) images | sortie $($outV.Frames) images, écart audio-vidéo {0:0.0} ms | contrôle : « $verify » | final : $(Prop (Encode-Summary $out) 'Status') | code $code" -f $gap)
+        }
+    } finally { Restart-BenchCoordinator @{} 'coordinator-t30' }
+    Ensure-Workers @('w1', 'w2')
+    $avi = New-T30Source 't30_xvid_mp3.avi' @('-c:v', 'libxvid', '-bf', '2', '-q:v', '5', '-g', '48') 'libmp3lame' 200
+    $ts = New-T30Source 't30_film.ts' $x264 'ac3' 300
+    foreach ($c in @(@{ Id = 'c'; Src = $avi; Format = 'avi'; Label = 'AVI MPEG-4 à B-frames compactées, MP3' }, @{ Id = 'd'; Src = $ts; Format = 'mpegts'; Label = 'MPEG-TS H.264, AC-3, 300 s' })) {
+        $name = "t30$($c.Id)"
+        $out = Join-Path $Paths.Out "conv-$name.mp4"
+        $s = Start-Shim (New-ConversionArgs -InputPath $c.Src -OutputPath $out -InputFormat $c.Format -InputCodec 'none' -Rate '25') $name
+        $code = Wait-Exit $s 1800
+        $verify = Log-Excerpt "shim-$name" 'source .*sultat|rejet|invérifiable' 3
+        $first = First-Decoded-Frame $c.Src
+        $ov = if (Test-Path $out) { First-Pts $out 'v:0' } else { -1 }
+        $r = Get-ConversionRunners $out
+        $ok = $code -eq 0 -and ($verify -join ' ') -notmatch 'rejet|invérifiable' -and ($verify -join ' ') -match 'source' -and (Prop (Encode-Summary $out) 'Status') -ne 'Failed' -and [math]::Abs($ov - $first) -le 0.003
+        Add-Result "T30$($c.Id)" "$($c.Label) : conversion propre, pas de rejet" $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+            "première image source {0:0.000} s, sortie {1:0.000} s | contrôle : « $verify » | workers : $($r.Workers -join ', '), tranches serveur : $($r.LocalRuns) | final : $(Prop (Encode-Summary $out) 'Status') | code $code" -f $first, $ov)
+    }
+}
+
 function T28 {
     Restart-BenchCoordinator @{ EncodeAudioAhead = $true } 'coordinator-before-t28'
     try { T28Core } finally { Restart-BenchCoordinator @{} 'coordinator-t28' }

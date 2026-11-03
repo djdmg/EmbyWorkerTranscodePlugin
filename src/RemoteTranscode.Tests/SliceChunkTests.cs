@@ -72,6 +72,22 @@ public class SliceChunkTests
         Assert.Equal(5.974, task.ConcatDurations(last)[0].Duration, 6);
     }
 
+    [Fact]
+    public void Last_slice_chunks_hold_whole_frames_at_the_rate_measured_in_them()
+    {
+        // No -r, source starting at 0.021333 s: the second chunk is listed at 10 s on ffmpeg's grid, its frames follow the first chunk's.
+        // As listed, the first chunk would last 9.979 s and everything after it come 21 ms early (measured, ffmpeg 9.0.2).
+        var last = new EncodeSlice { Index = 0, Start = 0.021333, End = 200, Last = true, SeekMargin = 0.001 };
+        var task = Task(last);
+        task.Chunks.Add(new EncodeChunk(0, 0.021333, 10, 1));
+        task.Chunks.Add(new EncodeChunk(1, 10, 200, 1));
+        Assert.Equal(9.978667, task.ConcatDurations(last)[0].Duration, 6);
+        // Off the grid by more than half a frame, ffmpeg still started at 0: nearest would be one frame off. Its 250 frames tell.
+        Assert.Equal(10, task.ConcatDurations(last, 0.04, 250)[0].Duration, 6);
+        // A count that does not fit the listed times is not believed; the rest stays on whole frames.
+        Assert.Equal(9.96, task.ConcatDurations(last, 0.04, 100)[0].Duration, 6);
+    }
+
     [Theory]
     [InlineData("25", 0.04)]
     [InlineData("24000/1001", 0.0417083)]

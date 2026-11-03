@@ -202,6 +202,37 @@ public class SliceShiftCheckTests
     }
 
     [Fact]
+    public void Frames_of_a_chunk_are_counted_over_the_whole_file()
+    {
+        static byte[] Packet(bool pes)
+        {
+            var p = new byte[188];
+            p[0] = 0x47;
+            if (pes)
+            {
+                p[1] = 0x40; p[3] = 0x10; p[6] = 1; p[11] = 0x80;
+            }
+            else
+                p[3] = 0x10;
+            return p;
+        }
+        var stream = new MemoryStream(new[] { true, false, false, true, false, true }.SelectMany(Packet).ToArray());
+        Assert.Equal(3, SliceShiftCheck.CountFrames(stream));
+        Assert.Equal(0, SliceShiftCheck.CountFrames(new MemoryStream(new byte[188])));
+    }
+
+    [Fact]
+    public void A_seeking_run_that_cannot_be_placed_rejects_the_conversion()
+    {
+        Assert.True(SliceShiftCheck.MustBeJudged(new RunStart(2, 100, 120, 0, 0)));
+        Assert.False(SliceShiftCheck.MustBeJudged(new RunStart(1, 0, 4, 0, 0)));   // near the start the times say nothing
+        Assert.Null(SliceShiftCheck.Unread([]));
+        string problem = SliceShiftCheck.Unread([3, 2, 3])!;
+        Assert.Contains("2, 3", problem);
+        Assert.StartsWith(SliceShiftCheck.ErrorPrefix, problem);
+    }
+
+    [Fact]
     public void The_verdict_names_the_shift_and_the_disagreement_on_the_file_start()
     {
         string problem = SliceShiftCheck.Problem([(2, 0.04)])!;

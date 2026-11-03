@@ -294,21 +294,7 @@ public sealed class EncodeTask
             : null;
 
     /// <summary>Time of one output frame when Emby's command sets the frame rate (-r): chunks then hold whole frames. Null otherwise.</summary>
-    public double? OutputFrameTime()
-    {
-        for (int i = 0; i + 1 < ChunkTemplate.Length; i++)
-        {
-            if (ChunkTemplate[i] != "-r" && !ChunkTemplate[i].StartsWith("-r:", StringComparison.Ordinal))
-                continue;
-            string[] parts = ChunkTemplate[i + 1].Split('/');
-            if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double rate))
-                return null;
-            if (parts.Length == 2 && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double den) && den > 0)
-                rate /= den;
-            return rate > 0 ? 1 / rate : null;
-        }
-        return null;
-    }
+    public double? OutputFrameTime() => EmbyConversionPlanner.OutputFrameTime(ChunkTemplate);
 
     public void AlignRunEnd(EncodeSlice slice)
     {
@@ -433,15 +419,19 @@ public sealed class EncodeTask
     /// (<see cref="ListingTolerance"/>): each slice then lasts exactly its length, whatever time base its run listed in.
     /// Further off is left as listed: missing frames must show in the check. The last slice has no end frame to align on,
     /// so a listing shift stayed in the length of a run's first chunk (54 ms between two frames at 25 fps and the rest of
-    /// the slice 14 ms late, seen on 2026-11-02): with Emby's -r its chunks hold whole frames, so their lengths are rounded
-    /// to whole frames, within the same tolerance. Call under the lock.
+    /// the slice 14 ms late, seen on 2026-11-02): its chunks hold whole frames (the output's rate, Emby's -r or else
+    /// <paramref name="chunkFrame"/>, measured in the chunks: ffmpeg regrids without -r too), so their lengths are rounded to whole
+    /// frames. The first chunk's length comes from its counted frames (<paramref name="firstChunkFrames"/>) when known: where ffmpeg puts a video
+    /// starting off its grid is not always the nearest place (a first frame at 0.53 of a frame stays at 0, measured), and the frames
+    /// tell. Without all this, a source starting at 0.021 s had everything past its first chunk 21 ms early (ffmpeg 9.0.2, MPEG-TS, -r not
+    /// set). Call under the lock.
     /// </summary>
-    public List<(int Index, double Duration)> ConcatDurations(EncodeSlice slice)
+    public List<(int Index, double Duration)> ConcatDurations(EncodeSlice slice, double? chunkFrame = null, int? firstChunkFrames = null)
     {
         int n = ContiguousChunks(slice);
         var chunks = Chunks.Where(c => c.Index >= slice.FirstChunk && c.Index < slice.FirstChunk + n).OrderBy(c => c.Index).ToList();
         var durations = new List<(int, double)>(chunks.Count);
-        double? frameTime = OutputFrameTime();
+        double? frameTime = OutputFrameTime() ?? chunkFrame;
         for (int i = 0; i < chunks.Count; i++)
         {
             var c = chunks[i];
@@ -457,8 +447,10 @@ public sealed class EncodeTask
             if (slice.Last && i + 1 < chunks.Count && frameTime is > 0 and var ft)
             {
                 double whole = Math.Round(duration / ft) * ft;
-                if (whole > 0 && Math.Abs(whole - duration) <= ListingTolerance(slice))
+                if (whole > 0 && Math.Abs(whole - duration) <= Math.Max(ListingTolerance(slice), ft * 0.55))
                     duration = whole;
+                if (i == 0 && firstChunkFrames is > 0 and var frames && Math.Abs(frames * ft - (end - c.Start)) <= ft * 3)
+                    duration = frames * ft;
             }
             durations.Add((c.Index, duration));
         }
@@ -703,8 +695,28 @@ public sealed partial class EncodeQueue : IJobOwner
                 frames = new ServerMedia.Boundary?[nominal.Count];
             }
         }
-        var single = new List<EncodeSlice> { new() { Index = 0, Start = frames[0]?.Time ?? 0, End = duration, Last = true } };
-        var bounds = new List<ServerMedia.Boundary> { frames[0] ?? new ServerMedia.Boundary(0, 0, 0) };
+        // The video starts where its first frame comes out of the decoder: the concat demuxer starts the first chunk at 0 whatever its
+        // times, and only this tells how late that chunk really is. An AVI with B-frames gives its first frame at 0.04 to 0.12 s for a first
+        // packet at 0: its first chunk came out that much early, then a hole (measured with ffmpeg 9.0.2).
+        double? firstFrame = null;
+        using (var limit = CancellationTokenSource.CreateLinkedTokenSource(token))
+        {
+            limit.CancelAfter(TimeSpan.FromSeconds(10));
+            try
+            {
+                firstFrame = await media.FirstFrameAsync(input, limit.Token);
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+            catch (Exception ex) when (ex is InvalidOperationException or System.Text.Json.JsonException)
+            {
+                // The packets' first time stays; the check of the result compares it with the decoder's and rejects a wrong start.
+                logger.LogWarning("First frame of {Input} unreadable: {Error}", input, ex.Message);
+            }
+        }
+        if (firstFrame is { } decoded && frames[0] is { } head)
+            frames[0] = head with { Time = decoded };
+        var single = new List<EncodeSlice> { new() { Index = 0, Start = firstFrame ?? frames[0]?.Time ?? 0, End = duration, Last = true } };
+        var bounds = new List<ServerMedia.Boundary> { frames[0] ?? new ServerMedia.Boundary(firstFrame ?? 0, 0, 0) };
         int skipped = 0;
         for (int i = 1; i < nominal.Count; i++)
         {
@@ -1378,6 +1390,7 @@ public sealed partial class EncodeQueue : IJobOwner
     /// <summary>All slices are there: the shim (running as Emby's user) assembles Emby's output from this list.</summary>
     private async Task HandToShimAsync(EncodeTask task)
     {
+        var (chunkFrame, firstChunkFrames) = await LastSliceFramesAsync(task);
         var list = new StringBuilder();
         var summary = new StringBuilder();
         string? audioFile, audioOffset;
@@ -1397,11 +1410,13 @@ public sealed partial class EncodeQueue : IJobOwner
                 ? "assemblage par le serveur (commande d'Emby, audio converti à l'avance)"
                 : "assemblage par le serveur (commande d'Emby)");
             // ffmpeg concat demuxer list, slice after slice; single quotes in paths are escaped the way the demuxer expects.
+            int listed = 0, altered = options.EncodeTestListedDurationShift is null ? -1 : task.Chunks.Count / 2;
             foreach (var slice in task.Slices.OrderBy(s => s.Index))
             {
-                var durations = task.ConcatDurations(slice);
-                foreach (var (index, duration) in durations)
+                var durations = task.ConcatDurations(slice, chunkFrame, firstChunkFrames);
+                foreach (var (index, listedDuration) in durations)
                 {
+                    double duration = listedDuration + (listed++ == altered ? options.EncodeTestListedDurationShift ?? 0 : 0);
                     list.Append(CultureInfo.InvariantCulture, $"file '{ChunkPath(task.Id, index).Replace("'", "'\\''")}'\n");
                     // Each chunk's exact length (from the segment lists, see ConcatDurations): without it the concat
                     // demuxer guesses it from the MPEG-TS file, and older ffmpeg builds (Emby's 5.1) guess one frame
@@ -1435,6 +1450,39 @@ public sealed partial class EncodeQueue : IJobOwner
         {
             await CancelAsync(task.Id, "relais d'Emby injoignable");
         }
+    }
+
+    /// <summary>
+    /// The frame length and the frames of the first chunk of the last slice, whose lengths depend on them (see
+    /// <see cref="EncodeTask.ConcatDurations"/>); null when unread. A whole chunk is read: 30 s of video in the spool.
+    /// </summary>
+    private async Task<(double? Frame, int? FirstChunkFrames)> LastSliceFramesAsync(EncodeTask task)
+    {
+        string path;
+        int index;
+        lock (gate)
+        {
+            if (task.Slices.OrderBy(s => s.Index).LastOrDefault() is not { } last
+                || task.Chunks.Where(c => c.Index >= last.FirstChunk).Select(c => (int?)c.Index).Min() is not { } first)
+                return (null, null);
+            index = first;
+            path = ChunkPath(task.Id, index);
+        }
+        return await Task.Run<(double?, int?)>(() =>
+        {
+            try
+            {
+                using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan);
+                double? frame = SliceShiftCheck.MeasureStart(index, SliceShiftCheck.FirstFrameTimes(file)).FrameSeconds;
+                file.Position = 0;
+                int frames = SliceShiftCheck.CountFrames(file);
+                return (frame, frames > 0 ? frames : null);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return (null, null);
+            }
+        });
     }
 
     /// <summary>

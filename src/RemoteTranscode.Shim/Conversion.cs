@@ -22,7 +22,8 @@ public sealed class ConversionSession : IDisposable
     private readonly string taskId;
     private readonly Stopwatch elapsed = Stopwatch.StartNew();
     private volatile bool quitRequested;
-    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(60);
+    // Long enough for the windows of a large file on a slow disk: past it, the file is rejected, as for any measure that fails.
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(180);
 
     private ConversionSession(ShimConfig config, StderrWriter err, ClientWebSocket socket, string[] args, string taskId)
     {
@@ -114,7 +115,7 @@ public sealed class ConversionSession : IDisposable
             string[] ahead = EmbyConversionPlanner.WithVideoOffset(plan.AudioAhead.Assembly(ready.AudioFile, ready.AudioOffset), ready.VideoOffset)
                 .Select(a => a == ConversionPlan.ListPlaceholder ? listFile : a).ToArray();
             err.Line("remote-transcode: vidéo encodée par les workers et audio converti à l'avance par le serveur, assemblage du fichier demandé par Emby (flux recopiés)");
-            var first = await RunAssemblyAsync(ahead, plan, plan.AudioAhead.SourceStreams.Length);
+            var first = await RunAssemblyAsync(ahead, plan, plan.AudioAhead.SourceStreams.Length, ready);
             if (first.Quit)
                 return first.Code;
             if (first.Problem is null || first.QuitLate)
@@ -132,7 +133,7 @@ public sealed class ConversionSession : IDisposable
         string[] assembly = EmbyConversionPlanner.WithVideoOffset(plan.AssemblyTemplate, ready.VideoOffset)
             .Select(a => a == ConversionPlan.ListPlaceholder ? listFile : a).ToArray();
         err.Line("remote-transcode: vidéo encodée par les workers, assemblage du fichier demandé par Emby");
-        var (code, problem, quit, quitLate) = await RunAssemblyAsync(assembly, plan, null);
+        var (code, problem, quit, quitLate) = await RunAssemblyAsync(assembly, plan, null, ready);
         if (quit)
             return code;
         await SendDoneAsync(new ConversionDone(taskId, problem is null, problem, lastCheck, audioAheadRejected));
@@ -151,7 +152,7 @@ public sealed class ConversionSession : IDisposable
     /// streams it must have. Quit: Emby cancelled ('q') during the assembly, the coordinator is told and nothing else
     /// may run. QuitLate: a 'q' reached the finished run during the check.
     /// </summary>
-    private async Task<(int Code, string? Problem, bool Quit, bool QuitLate)> RunAssemblyAsync(string[] assembly, ConversionPlan plan, int? audioStreams)
+    private async Task<(int Code, string? Problem, bool Quit, bool QuitLate)> RunAssemblyAsync(string[] assembly, ConversionPlan plan, int? audioStreams, ConversionReady ready)
     {
         var clock = Stopwatch.StartNew();
         lastCheck = null;
@@ -176,21 +177,9 @@ public sealed class ConversionSession : IDisposable
                 problem = SourceInfo.VerifyDuration(source, result);
                 if (problem is null && audioStreams is { } expected && result.AudioStreams != expected)
                     problem = $"{result.AudioStreams} piste(s) audio au lieu de {expected}";
-                // To the frame: a few frames missing at the end (a lost tiny last chunk) are far below the duration
-                // check's tolerance.
+                // To the frame and through the whole file: what the length check cannot see.
                 if (problem is null)
-                {
-                    var sourceVideo = await VideoSpanAsync(plan.Input, source.DurationSeconds);
-                    var resultVideo = await VideoSpanAsync(plan.Output, result.DurationSeconds);
-                    lastCheck = $"vidéo source {sourceVideo}, résultat {resultVideo}";
-                    err.Line($"remote-transcode: {lastCheck}");
-                    // An end that cannot be read is never taken as a pass: the file is not handed to Emby unchecked.
-                    problem = !sourceVideo.IsKnown || !resultVideo.IsKnown
-                        ? $"vérification impossible : fin de la vidéo illisible ({(sourceVideo.IsKnown ? "résultat" : "source")})"
-                        : SourceInfo.VerifyVideoSpan(sourceVideo, resultVideo)
-                            ?? SourceInfo.VerifyVideoStart(sourceVideo, await FileStartAsync(plan.Input), resultVideo);
-                    problem ??= await AudioStartProblemAsync(plan);
-                }
+                    problem = await SyncProblemAsync(plan, ready);
             }
             catch (Exception ex)
             {
@@ -201,38 +190,27 @@ public sealed class ConversionSession : IDisposable
     }
 
     /// <summary>
-    /// The audio streams start where they do in the source (SourceInfo.VerifyAudioStarts), for both assemblies. A measure that
-    /// cannot be made says nothing about the file: unlike the video's end, it never rejects it.
+    /// Is the result in step with its source, from the first frame to the last (<see cref="SyncCheck"/>)? Anything that cannot be measured
+    /// rejects the file: it is not handed to Emby unproved.
     /// </summary>
-    private async Task<string?> AudioStartProblemAsync(ConversionPlan plan)
+    private async Task<string?> SyncProblemAsync(ConversionPlan plan, ConversionReady ready)
     {
-        if (EmbyConversionPlanner.WhyAudioStartIsNotCompared(plan.AssemblyTemplate) is { } why)
-        {
-            err.Line($"remote-transcode: début de l'audio non vérifié ({why})");
-            return null;
-        }
-        if (EmbyConversionPlanner.AssemblySourceMaps(plan.AssemblyTemplate) is not { } maps)
-            return null;
-        try
-        {
-            var source = StreamStarts.Parse(await RunProbeAsync(StreamStarts.ProbeArgs(plan.Input)));
-            var result = StreamStarts.Parse(await RunProbeAsync(StreamStarts.ProbeArgs(plan.Output)));
-            return SourceInfo.VerifyAudioStarts(source, maps, result);
-        }
-        catch (Exception ex)
-        {
-            err.Line($"remote-transcode: début de l'audio non vérifié ({ex.GetType().Name})");
-            return null;
-        }
+        // The same command the planner let through: the shape is known to be comparable.
+        if (SyncExpectation.From(plan.AssemblyTemplate, plan.ChunkTemplate) is not { } expected)
+            return "vérification impossible : pistes de la commande inconnues";
+        double offset = ready.VideoOffset is null ? 0 : double.Parse(ready.VideoOffset, CultureInfo.InvariantCulture);
+        var boundaries = SyncCheck.ListBoundaries(await File.ReadAllTextAsync(ready.ListFile), offset);
+        var clock = Stopwatch.StartNew();
+        var check = await SyncCheck.RunAsync(RunProbeOrThrowAsync, plan.Input, plan.Output, expected, boundaries);
+        lastCheck = $"vidéo source {check.Source}, résultat {check.Result} ; {check.Summary}";
+        err.Line(string.Create(CultureInfo.InvariantCulture, $"remote-transcode: {lastCheck} ({clock.Elapsed.TotalSeconds:0.0} s)"));
+        return check.Problem;
     }
 
-    /// <summary>The file's start as Emby's ffprobe reads it; null when it gives none.</summary>
-    private async Task<double?> FileStartAsync(string path)
+    private async Task<string> RunProbeOrThrowAsync(string[] arguments)
     {
-        using var doc = JsonDocument.Parse(await RunProbeAsync(["-v", "error", "-show_entries", "format=start_time", "-print_format", "json", path]));
-        return doc.RootElement.TryGetProperty("format", out var format) && format.TryGetProperty("start_time", out var st) && double.TryParse(st.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double start)
-            ? start
-            : null;
+        string output = await RunProbeAsync(arguments);
+        return lastProbeExitCode == 0 ? output : throw new InvalidOperationException(lastProbeError ?? "ffprobe en échec");
     }
 
     /// <summary>Duration, video height and stream counts of a file, read with Emby's ffprobe.</summary>
@@ -254,69 +232,11 @@ public sealed class ConversionSession : IDisposable
         return new SourceInfo(duration, 0, height, null, audio, subs);
     }
 
-    /// <summary>
-    /// Where the video starts and ends in a file, to the frame: the stream's start time, and the end of its last
-    /// packets, read from the last 30 s only (no decoding).
-    /// </summary>
-    private async Task<VideoSpan> VideoSpanAsync(string path, double duration)
-    {
-        // Second try over the last 10 minutes: a probe that failed once (file briefly locked, by an antivirus for
-        // instance), or a video ending well before the audio.
-        var span = await VideoSpanAsync(path, duration, 30);
-        if (!span.IsKnown)
-        {
-            err.Line($"remote-transcode: fin de la vidéo non lue dans {path} ({lastProbeError ?? "aucun paquet vidéo"}), nouvel essai");
-            span = await VideoSpanAsync(path, duration, 600);
-        }
-        return span;
-    }
-
     private string? lastProbeError;
+    private int lastProbeExitCode;
 
     /// <summary>The check line of the last assembly (source and result video spans), sent with its verdict.</summary>
     private string? lastCheck;
-
-    private async Task<VideoSpan> VideoSpanAsync(string path, double duration, double window)
-    {
-        // A bounded interval: ffprobe 9 sometimes prints no packet at all, without error, for an open-ended one.
-        string from = Math.Max(0, duration - window).ToString("0.###", CultureInfo.InvariantCulture) + "%"
-            + (duration + 3600).ToString("0.###", CultureInfo.InvariantCulture);
-        using var doc = JsonDocument.Parse(await RunProbeAsync(["-v", "error", "-select_streams", "V:0", "-read_intervals", from,
-            "-show_entries", "packet=pts_time,dts_time,duration_time:stream=start_time,avg_frame_rate", "-print_format", "json", path]));
-        var root = doc.RootElement;
-        double start = 0, frame = 0;
-        if (root.TryGetProperty("streams", out var streams) && streams.GetArrayLength() > 0)
-        {
-            var v = streams[0];
-            if (v.TryGetProperty("start_time", out var st) && TryNumber(st.GetString(), out double s0))
-                start = s0;
-            if (v.TryGetProperty("avg_frame_rate", out var fr) && fr.GetString()?.Split('/') is [var num, var den]
-                && TryNumber(num, out double n) && TryNumber(den, out double d) && n > 0 && d > 0)
-                frame = d / n;
-        }
-        double end = double.NaN;
-        bool approximate = false;
-        if (root.TryGetProperty("packets", out var packets))
-        {
-            foreach (var p in packets.EnumerateArray())
-            {
-                // AVI (packed B-frames) stores no presentation time on many packets: their decoding time then counts.
-                if (!(p.TryGetProperty("pts_time", out var pt) && TryNumber(pt.GetString(), out double pts)))
-                {
-                    if (!(p.TryGetProperty("dts_time", out var dtt) && TryNumber(dtt.GetString(), out pts)))
-                        continue;
-                    approximate = true;
-                }
-                double length = p.TryGetProperty("duration_time", out var dt) && TryNumber(dt.GetString(), out double l) ? l : frame;
-                if (double.IsNaN(end) || pts + length > end)
-                    end = pts + length;
-            }
-        }
-        return new VideoSpan(start, end, frame, approximate);
-
-        static bool TryNumber(string? text, out double value) =>
-            double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
-    }
 
     /// <summary>Runs Emby's ffprobe and returns its standard output; a hung probe is killed (TimeoutException).</summary>
     private async Task<string> RunProbeAsync(IEnumerable<string> arguments)
@@ -352,6 +272,7 @@ public sealed class ConversionSession : IDisposable
         }
         // Kept for the log of a failed measure; JSON output is still parsed (ffprobe may warn and succeed).
         string tail = errors.Trim();
+        lastProbeExitCode = p.ExitCode;
         lastProbeError = p.ExitCode != 0 || tail.Length > 0
             ? $"ffprobe code {p.ExitCode}{(tail.Length > 0 ? " : " + tail[Math.Max(0, tail.Length - 200)..] : "")}"
             : null;

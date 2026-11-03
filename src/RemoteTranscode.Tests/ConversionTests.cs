@@ -140,7 +140,6 @@ public class ConversionTests
     [InlineData("-c:a:1", "aac", "-c:a:1", "libopus")]
     [InlineData("-f", "matroska,webm", "-f", "mpegts")]           // timestamp discontinuities shared with the video
     [InlineData("-sn", null, "-shortest", null)]                  // ties the audio to the video
-    [InlineData("-map", "0:1", "-map", "0:a:0")]
     public void Commands_outside_the_checked_shape_keep_the_usual_assembly(string option, string? value, string replacement, string? newValue)
     {
         var list = EmbyConversion.ToList();
@@ -250,102 +249,6 @@ public class ConversionTests
         Assert.True(ArgTemplateValidator.Validate(run, out var error), error);
     }
 
-    [Theory]
-    [InlineData(0.079, 0.0, 0.079, 0.0167, true)]    // put back in place
-    [InlineData(0.079, 0.0, 0.0, 0.0167, false)]     // moved to 0: ahead of its audio
-    [InlineData(0.083, 0.083, 0.0, 0.04, true)]      // the whole file starts late: everything moves together
-    [InlineData(0.021, 0.0, 0.021, 0.04, true)]
-    [InlineData(0.021, 0.0, 0.0, 0.04, false)]
-    [InlineData(0.0, 0.0, 0.004, 0.0167, true)]      // within the tolerance
-    public void Video_start_check_sees_a_video_out_of_step(double sourceStart, double fileStart, double resultStart, double frame, bool passes)
-    {
-        var source = new VideoSpan(sourceStart, 100, frame);
-        var result = new VideoSpan(resultStart, 100, frame);
-        Assert.Equal(passes, SourceInfo.VerifyVideoStart(source, fileStart, result) is null);
-    }
-
-    [Fact]
-    public void Video_start_check_is_skipped_without_exact_times()
-    {
-        Assert.Null(SourceInfo.VerifyVideoStart(new VideoSpan(0.5, 100, 0.04, Approximate: true), 0, new VideoSpan(0, 100, 0.04)));
-        Assert.Null(SourceInfo.VerifyVideoStart(new VideoSpan(0.5, 100, 0.04), null, new VideoSpan(0, 100, 0.04)));
-    }
-
-    private static StreamStarts Source(double? fileStart, double? audioStart) =>
-        new(fileStart, [new(0, "video", "h264", 0, 0.079), new(1, "audio", "ac3", 48000, audioStart)]);
-
-    private static StreamStarts Result(double? audioStart, string codec = "aac", int rate = 48000) =>
-        new(0, [new(0, "video", "h264", 0, 0.079), new(1, "audio", codec, rate, audioStart)]);
-
-    [Theory]
-    [InlineData(0.0, 0.0, 0.0, true)]              // AAC in MP4: first packet at -1024 samples, the edit list hides it
-    [InlineData(0.0, 0.0, 0.014, true)]
-    [InlineData(0.0, 0.0, 0.016, false)]
-    [InlineData(0.0, 0.0, -0.016, false)]
-    [InlineData(0.021, 0.021, 0.0, true)]          // the whole file starts late: everything moves together
-    [InlineData(0.021, 0.0, 0.021, true)]          // audio after the file's start stays so
-    [InlineData(0.021, 0.0, 0.0, true)]            // ...within the priming: a stream starting later reads its first packet
-    [InlineData(0.5, 0.0, 0.478667, true)]         // measured: AAC at 48 kHz, sound at 0.5 s
-    [InlineData(0.5, 0.0, 0.5, true)]
-    [InlineData(0.5, 0.0, 0.46, false)]            // more than the priming and the tolerance
-    [InlineData(0.5, 0.0, 0.516, false)]
-    [InlineData(0.5, 0.0, 0.0, false)]             // moved to 0
-    public void Audio_start_check_sees_an_audio_out_of_step(double sourceStart, double fileStart, double resultStart, bool passes) =>
-        Assert.Equal(passes, SourceInfo.VerifyAudioStarts(Source(fileStart, sourceStart), [1], Result(resultStart)) is null);
-
-    [Fact]
-    public void Audio_start_check_allows_the_priming_of_the_results_codec_only()
-    {
-        // 1105 samples of MP3 at 48 kHz, measured: 0.476979 for 0.5 s.
-        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1], Result(0.476979, "mp3")));
-        // AAC at 44.1 kHz: 23.2 ms.
-        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1], Result(0.4768, "aac", 44100)));
-        // A copied AC-3 has no priming allowed: 25 ms early is a move; 5 ms (its first packet, measured) is not.
-        Assert.NotNull(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1], Result(0.475, "ac3")));
-        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1], Result(0.495, "ac3")));
-    }
-
-    [Fact]
-    public void Audio_start_check_goes_through_the_maps()
-    {
-        var source = new StreamStarts(0, [
-            new(0, "video", "h264", 0, 0), new(1, "audio", "ac3", 48000, 0), new(2, "subtitle", "subrip", 0, 1), new(3, "audio", "ac3", 48000, 0.5)]);
-        var inOrder = new StreamStarts(0, [new(0, "video", "h264", 0, 0), new(1, "audio", "aac", 48000, 0.5), new(2, "audio", "aac", 48000, 0), new(3, "subtitle", "mov_text", 0, 1)]);
-        // Emby asks for the second track first; the subtitle's map counts for nothing.
-        Assert.Null(SourceInfo.VerifyAudioStarts(source, [3, 2, 1], inOrder));
-        string? problem = SourceInfo.VerifyAudioStarts(source, [1, 3], inOrder);
-        Assert.Contains("audio 1", problem);
-    }
-
-    [Fact]
-    public void Audio_start_check_is_skipped_without_values()
-    {
-        Assert.Null(SourceInfo.VerifyAudioStarts(Source(null, 0.5), [1], Result(0)));
-        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, null), [1], Result(0)));
-        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1], Result(null)));
-        // Streams that do not correspond: another check's business.
-        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1, 1], Result(0)));
-        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [], Result(0)));
-    }
-
-    [Fact]
-    public void Stream_starts_are_read_from_ffprobe_and_what_it_lacks_stays_unknown()
-    {
-        var starts = StreamStarts.Parse("""
-            {"streams":[{"index":0,"codec_name":"h264","codec_type":"video","start_time":"0.079000"},
-                        {"index":1,"codec_name":"aac","codec_type":"audio","sample_rate":"48000","start_time":"0.000000"},
-                        {"index":2,"codec_name":"ac3","codec_type":"audio","sample_rate":"44100","start_time":"N/A"},
-                        {"index":3,"codec_type":"audio"}],
-             "format":{"start_time":"0.021000"}}
-            """);
-        Assert.Equal(0.021, starts.FileStart);
-        Assert.Equal(0.079, starts.Streams[0].Start);
-        Assert.Equal(1024.0 / 48000, starts.Streams[1].Priming);
-        Assert.Null(starts.Streams[2].Start);
-        Assert.Null(starts.Streams[3].Start);
-        Assert.Null(StreamStarts.Parse("""{"format":{}}""").FileStart);
-    }
-
     private static readonly string[] AudioAssembly =
         ["-y", "-copyts", "-start_at_zero", "-f", "matroska,webm", "-c:v:0", "h264", "-i", "/m/a.mkv", "-f", "concat", "-safe", "0", "-i", "{chunklist}",
          "-map", "1:v:0", "-map", "0:1", "-map", "0:3", "-sn", "-c:v:0", "copy", "-c:a:0", "aac", "-af", "volume=2", "-avoid_negative_ts", "disabled", "-f", "mp4", "/o/a.mp4"];
@@ -358,48 +261,148 @@ public class ConversionTests
     }
 
     [Fact]
-    public void Audio_start_is_compared_on_a_usual_assembly_and_on_embys_shape_of_command()
+    public void Result_is_verifiable_on_a_usual_assembly_and_on_embys_shape_of_command()
     {
-        Assert.Null(EmbyConversionPlanner.WhyAudioStartIsNotCompared(AudioAssembly));
+        Assert.Null(EmbyConversionPlanner.WhyResultCannotBeVerified(AudioAssembly));
         var plan = EmbyConversionPlanner.Plan(EmbyConversion, Roots);
-        Assert.Null(EmbyConversionPlanner.WhyAudioStartIsNotCompared(plan.AssemblyTemplate));
+        Assert.True(plan.Remote, plan.Reason);
+        Assert.Null(EmbyConversionPlanner.WhyResultCannotBeVerified(plan.AssemblyTemplate));
         Assert.Equal([1, 2], EmbyConversionPlanner.AssemblySourceMaps(plan.AssemblyTemplate));
+        var expected = SyncExpectation.From(plan.AssemblyTemplate, plan.ChunkTemplate);
+        Assert.Equal(["aac", "aac", null], expected!.Encoders.Concat([null]));
+        Assert.Null(expected.OutputFrame);
     }
 
     [Theory]
     [InlineData("-async", "1")]
     [InlineData("-ss", "10")]
+    [InlineData("-sseof", "-10")]
+    [InlineData("-t", "100")]
+    [InlineData("-to", "100")]
     [InlineData("-itsoffset", "0.5")]
     [InlineData("-output_ts_offset", "1")]
     [InlineData("-af", "aresample=async=1:first_pts=0")]
+    [InlineData("-af", "volume=2,atempo=1.04")]
+    [InlineData("-af", "loudnorm")]                 // not listed: refused without having to know what it does
     [InlineData("-filter:a:0", "adelay=500")]
+    [InlineData("-filter:a:0", "asetpts=PTS-STARTPTS")]
+    [InlineData("-filter:a:0", "atrim=1")]
     [InlineData("-avoid_negative_ts", "make_zero")]
-    public void Audio_start_is_not_compared_when_emby_asks_to_move_the_audio(string option, string value)
+    [InlineData("-c:a:0", "libfdk_aac")]            // priming not measured
+    [InlineData("-map", "0:a:0")]                   // which stream is that? Not known here
+    public void Commands_the_check_could_not_prove_are_refused_at_capture(string option, string value)
     {
         var assembly = AudioAssembly.ToList();
         assembly.InsertRange(assembly.Count - 1, [option, value]);
-        Assert.NotNull(EmbyConversionPlanner.WhyAudioStartIsNotCompared(assembly));
-    }
+        Assert.NotNull(EmbyConversionPlanner.WhyResultCannotBeVerified(assembly));
 
-    [Fact]
-    public void Audio_start_is_compared_with_shortest_which_only_cuts_the_end()
-    {
-        var assembly = AudioAssembly.ToList();
-        assembly.Insert(assembly.Count - 1, "-shortest");
-        Assert.Null(EmbyConversionPlanner.WhyAudioStartIsNotCompared(assembly));
+        var command = EmbyConversion.ToList();
+        command.InsertRange(command.Count - 1, [option, value]);
+        var plan = EmbyConversionPlanner.Plan(command, Roots);
+        Assert.False(plan.Remote, option);
+        Assert.Contains(plan.Reason.Contains("invérifiable") ? "invérifiable" : "", plan.Reason);
     }
 
     [Theory]
-    [InlineData("matroska,webm", "mpegts")]     // an MPEG-TS result starts at 1.4 s
-    [InlineData("matroska,webm", "avi")]
-    [InlineData("mpegts", "mp4")]               // a stream's first packets may not decode
-    [InlineData("avi", "mp4")]                  // approximate times
-    public void Audio_start_is_not_compared_on_containers_not_measured(string input, string output)
+    [InlineData("-af", "volume=2")]
+    [InlineData("-filter:a:0", "volume=2")]
+    [InlineData("-filter:a:1", "aformat=channel_layouts=stereo")]
+    [InlineData("-af", "pan=stereo|c0=c0|c1=c1")]
+    public void Filters_keeping_every_sample_in_place_stay_with_the_workers(string option, string value)
+    {
+        var command = EmbyConversion.ToList();
+        command.InsertRange(command.Count - 1, [option, value]);
+        var plan = EmbyConversionPlanner.Plan(command, Roots);
+        Assert.True(plan.Remote, plan.Reason);
+    }
+
+    [Theory]
+    [InlineData("setpts=PTS+0.5/TB")]
+    [InlineData("scale=w=1280:h=720,trim=10:20")]
+    public void Video_filters_moving_frames_are_refused_at_capture(string graph)
+    {
+        var command = EmbyConversion.ToList();
+        command[command.IndexOf("scale=w=1280:h=720")] = graph;
+        var plan = EmbyConversionPlanner.Plan(command, Roots);
+        Assert.False(plan.Remote);
+        Assert.Contains("invérifiable", plan.Reason);
+    }
+
+    [Fact]
+    public void Copyts_keeping_the_files_start_is_refused_at_capture()
+    {
+        var command = EmbyConversion.ToList();
+        command.Remove("-start_at_zero");
+        Assert.Contains("invérifiable", EmbyConversionPlanner.Plan(command, Roots).Reason);
+    }
+
+    [Fact]
+    public void Shortest_stays_comparable_it_only_cuts_the_end()
+    {
+        var assembly = AudioAssembly.ToList();
+        assembly.Insert(assembly.Count - 1, "-shortest");
+        Assert.Null(EmbyConversionPlanner.WhyResultCannotBeVerified(assembly));
+    }
+
+    [Theory]
+    [InlineData("matroska,webm", "mp4", true)]
+    [InlineData("mov,mp4,m4a,3gp,3g2,mj2", "mov", true)]
+    [InlineData("matroska,webm", "matroska", true)]
+    [InlineData("avi", "mp4", true)]                // read on its decoding times
+    [InlineData("mpegts", "mp4", true)]             // from the first frame the decoder gives
+    [InlineData("matroska,webm", "mpegts", false)]  // an MPEG-TS result starts at 1.4 s
+    [InlineData("matroska,webm", "avi", false)]
+    [InlineData("mpeg", "mp4", false)]              // not measured
+    [InlineData("asf", "mp4", false)]
+    [InlineData("flv", "mp4", false)]
+    public void Containers_are_those_measured(string input, string output, bool verifiable)
     {
         var assembly = AudioAssembly.ToArray();
         assembly[4] = input;
         assembly[^2] = output;
-        Assert.NotNull(EmbyConversionPlanner.WhyAudioStartIsNotCompared(assembly));
+        Assert.Equal(verifiable, EmbyConversionPlanner.WhyResultCannotBeVerified(assembly) is null);
+    }
+
+    [Theory]
+    [InlineData("/m/a.avi", true)]
+    [InlineData("/m/a.ts", true)]
+    [InlineData("/m/a.M2TS", true)]
+    [InlineData("/m/a.mkv", true)]
+    [InlineData("/m/a.mpg", false)]
+    [InlineData("/m/a.wmv", false)]
+    public void Without_an_input_format_the_extension_says(string input, bool verifiable)
+    {
+        string[] assembly = ["-y", "-i", input, "-f", "concat", "-safe", "0", "-i", "{chunklist}", "-map", "1:v:0", "-map", "0:1", "-c:a:0", "aac", "-avoid_negative_ts", "disabled", "-f", "mp4", "/o/a.mp4"];
+        Assert.Equal(verifiable, EmbyConversionPlanner.WhyResultCannotBeVerified(assembly) is null);
+    }
+
+    [Fact]
+    public void Output_format_must_be_given_and_matroska_needs_negative_timestamps_left_alone()
+    {
+        string[] noFormat = ["-i", "/m/a.mkv", "-f", "concat", "-safe", "0", "-i", "{chunklist}", "-map", "1:v:0", "/o/a.mp4"];
+        Assert.NotNull(EmbyConversionPlanner.WhyResultCannotBeVerified(noFormat));
+        string[] matroska = ["-i", "/m/a.mkv", "-f", "concat", "-safe", "0", "-i", "{chunklist}", "-map", "1:v:0", "-f", "matroska", "/o/a.mkv"];
+        Assert.NotNull(EmbyConversionPlanner.WhyResultCannotBeVerified(matroska));
+        string[] mp4 = ["-i", "/m/a.mkv", "-f", "concat", "-safe", "0", "-i", "{chunklist}", "-map", "1:v:0", "-f", "mp4", "/o/a.mp4"];
+        Assert.Null(EmbyConversionPlanner.WhyResultCannotBeVerified(mp4));
+    }
+
+    [Fact]
+    public void Audio_encoders_of_an_assembly_are_read_stream_by_stream()
+    {
+        string[] one = ["-i", "s", "-i", "l", "-c:a", "aac", "-c:a:1", "copy", "o"];
+        Assert.Equal(["aac", "copy"], EmbyConversionPlanner.AssemblyAudioEncoders(one, 2));
+        Assert.Equal([null, "ac3"], EmbyConversionPlanner.AssemblyAudioEncoders(["-i", "s", "-i", "l", "-c:a:1", "ac3", "o"], 2));
+        // The input's options name no encoder.
+        Assert.Equal([null], EmbyConversionPlanner.AssemblyAudioEncoders(["-c:a", "ac3", "-i", "s", "-i", "l", "o"], 1));
+    }
+
+    [Fact]
+    public void Frame_time_is_read_from_r()
+    {
+        Assert.Equal(0.04, EmbyConversionPlanner.OutputFrameTime(["-r:v:0", "25"]));
+        Assert.Equal(1001.0 / 24000, EmbyConversionPlanner.OutputFrameTime(["-r", "24000/1001"]));
+        Assert.Null(EmbyConversionPlanner.OutputFrameTime(["-c:v", "libx264"]));
     }
 
     [Fact]
@@ -415,7 +418,7 @@ public class ConversionTests
         Assert.Null(SourceInfo.VerifyVideoSpan(avi, new VideoSpan(0, 2380.420, 0.04)));
         Assert.NotNull(SourceInfo.VerifyVideoSpan(avi, new VideoSpan(0, 2381.674, 0.04)));   // sliced: 34 frames too many
         Assert.NotNull(SourceInfo.VerifyVideoSpan(source, new VideoSpan(0, 2643.640 + 2 * frame, frame)));
-        Assert.Null(SourceInfo.VerifyVideoSpan(source, new VideoSpan(0, double.NaN, frame)));   // end unreadable: not judged here
+        Assert.Null(SourceInfo.VerifyVideoSpan(source, new VideoSpan(0, double.NaN, frame)));   // end unreadable: SyncCheck rejects it before this
     }
 
     [Theory]

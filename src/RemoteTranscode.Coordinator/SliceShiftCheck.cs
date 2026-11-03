@@ -25,8 +25,9 @@ public sealed record RunStart(int Slice, int Chunk, double Start, double Machine
 /// </para>
 /// Not judged, because their times say nothing: a run without seek (the muxer moves its first chunk by the encoder's delay, 2 frames
 /// measured, and no seek means no frame to miss), a run starting on a time that is not a known frame, a run whose worker did
-/// not report its file's start, a run near the file's start, and any time that is not close to the source's (a build counting
-/// from the run's start). Server runs are not judged: their build and the boundaries' ffprobe read the file alike, so
+/// not report its file's start, and a run near the file's start. A run past that whose times are not close to the source's (a build
+/// counting from the run's start), or whose chunk cannot be read, rejects the conversion (see <see cref="MustBeJudged"/>): nothing else
+/// could see it. Server runs are not judged: their build and the boundaries' ffprobe read the file alike, so
 /// they cannot miss their frame this way, and the encoded times of Emby's 5.1 fork could not be measured here.
 /// </summary>
 public static class SliceShiftCheck
@@ -74,6 +75,21 @@ public static class SliceShiftCheck
         return times;
     }
 
+    /// <summary>The frames of an MPEG-TS chunk, read from the whole file (one PES packet per frame, see <see cref="FirstFrameTimes"/>); 0 when it is not plain MPEG-TS.</summary>
+    public static int CountFrames(Stream chunk)
+    {
+        int frames = 0;
+        var buffer = new byte[TsPacket];
+        while (chunk.ReadAtLeast(buffer, TsPacket, throwOnEndOfStream: false) == TsPacket)
+        {
+            if (buffer[0] != 0x47)
+                return 0;
+            if (PesTime(buffer) != null)
+                frames++;
+        }
+        return frames;
+    }
+
     /// <summary>The PTS of the PES packet starting in this TS packet, if any; tables (PAT, PMT...) never look like one.</summary>
     private static double? PesTime(byte[] ts)
     {
@@ -105,6 +121,16 @@ public static class SliceShiftCheck
     /// <summary>A shift over <see cref="Threshold"/> of an output frame (the one set by Emby's command, else the one measured in the chunk).</summary>
     public static bool IsShifted(double shift, double? setFrame, double? measuredFrame) =>
         (setFrame ?? measuredFrame) is > 0 and var frame && Math.Abs(shift) > Threshold * frame;
+
+    /// <summary>
+    /// A run whose first frame must be placed for its conversion to pass: one that seeks far enough from the file's start for its times to say
+    /// something. Nothing else can see a run on the wrong frame, so one that cannot be placed is not taken as a good one.
+    /// </summary>
+    public static bool MustBeJudged(RunStart run) => run.Start >= MinStart;
+
+    /// <summary>The reason for runs that could not be placed; null when none. Same start as <see cref="Problem"/>: same fault, same verdict.</summary>
+    public static string? Unread(IReadOnlyList<int> slices) =>
+        slices.Count == 0 ? null : $"{ErrorPrefix} ? première image illisible dans les tranches {string.Join(", ", slices.Distinct().OrderBy(s => s).Take(12))}";
 
     /// <summary>The reason a conversion is rejected for, numbers only; null when no slice is shifted.</summary>
     public static string? Problem(IReadOnlyList<(int Slice, double Shift)> shifted)

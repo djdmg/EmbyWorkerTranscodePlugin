@@ -106,7 +106,8 @@ public sealed partial class EncodeQueue
 
     /// <summary>
     /// Reads the first frame of each worker run from its first chunk (<see cref="SliceShiftCheck"/>). Returns the reason to
-    /// reject the conversion, null otherwise: a chunk that cannot be read only leaves its run unjudged.
+    /// reject the conversion, null otherwise. The check of the assembled file cannot see this fault, so a run that seeks and whose first
+    /// frame cannot be placed (chunk unreadable, times that say nothing) rejects it too.
     /// </summary>
     private async Task<string?> SliceShiftProblemAsync(EncodeTask task)
     {
@@ -127,6 +128,7 @@ public sealed partial class EncodeQueue
         return await Task.Run(() =>
         {
             var shifted = new List<(int Slice, double Shift)>();
+            var unread = new List<int>();
             int measured = 0;
             double largest = 0;
             foreach (var (run, path) in runs)
@@ -136,7 +138,11 @@ public sealed partial class EncodeQueue
                     using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan);
                     var chunk = SliceShiftCheck.MeasureStart(run.Chunk, SliceShiftCheck.FirstFrameTimes(file));
                     if (SliceShiftCheck.Shift(run, chunk.FirstPts) is not { } shift)
+                    {
+                        if (SliceShiftCheck.MustBeJudged(run))
+                            unread.Add(run.Slice);
                         continue;
+                    }
                     measured++;
                     largest = Math.Max(largest, Math.Abs(shift));
                     if (SliceShiftCheck.IsShifted(shift, setFrame, chunk.FrameSeconds))
@@ -145,11 +151,13 @@ public sealed partial class EncodeQueue
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     logger.LogDebug("Conversion {Id}: first chunk of slice {Slice} not read ({Error})", task.Id, run.Slice, ex.GetType().Name);
+                    if (SliceShiftCheck.MustBeJudged(run))
+                        unread.Add(run.Slice);
                 }
             }
             logger.LogInformation("Conversion {Id}: first frame of {Measured} of {Runs} worker runs read in {Ms:0} ms, largest shift {Shift:0.0} ms",
                 task.Id, measured, runs.Count, clock.Elapsed.TotalMilliseconds, largest * 1000);
-            return SliceShiftCheck.Problem(shifted);
+            return SliceShiftCheck.Problem(shifted) ?? SliceShiftCheck.Unread(unread);
         });
     }
 

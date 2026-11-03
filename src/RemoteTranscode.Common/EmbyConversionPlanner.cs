@@ -217,6 +217,11 @@ public static class EmbyConversionPlanner
         string[] template = chunk.ToArray();
         if (!ArgTemplateValidator.Validate(template, out string? invalid))
             return Local($"commande non prise en charge : {invalid}");
+        // Fail closed, and before anything is encoded: what the final check could not prove stays with Emby's ffmpeg.
+        if (filters.FirstOrDefault(VideoTimeFilters.Contains) is { } movingFilter)
+            return Local($"résultat invérifiable : filtre vidéo {movingFilter}");
+        if (WhyResultCannotBeVerified(assembly) is { } unverifiable)
+            return Local($"résultat invérifiable : {unverifiable}");
         var audio = PlanAudioAhead(args, iIndex, outputSide, firstMap, assembly, out string? audioReason);
         return new ConversionPlan(true, "ok", input, output, template, assembly.ToArray(), requirements)
         {
@@ -455,43 +460,56 @@ public static class EmbyConversionPlanner
         static bool IsAudioSpec(string spec) => spec == "a" || spec.StartsWith("a:", StringComparison.Ordinal);
     }
 
-    // ---- Where the audio starts (see SourceInfo.VerifyAudioStarts) ----
+    // ---- What the check of the result can prove (see SyncCheck) ----
 
-    // Audio filters that move sound in time (or can: aresample with async).
-    private static readonly string[] AudioMovingFilters = ["aresample", "asetpts", "atrim", "adelay", "atempo"];
-
-    // Source containers with exact times, whose streams start where they say. Not MPEG-TS (cut anywhere, a stream's first
-    // packets may not decode, and ffmpeg corrects its times) nor AVI (times may be approximate).
-    private static readonly HashSet<string> AudioStartInputs = new(StringComparer.Ordinal)
+    // Options that move or cut streams on Emby's request: the result is then not to be compared with its source's times.
+    private static readonly HashSet<string> TimeOptions = new(StringComparer.Ordinal)
     {
-        "matroska,webm", "matroska", "webm", "mov,mp4,m4a,3gp,3g2,mj2", "mov", "mp4",
+        "-async", "-ss", "-sseof", "-to", "-t", "-itsoffset", "-output_ts_offset", "-itsscale",
     };
 
-    private static readonly HashSet<string> AudioStartInputExtensions = new(StringComparer.OrdinalIgnoreCase) { ".mkv", ".webm", ".mp4", ".m4v", ".mov" };
+    // The only audio filters that keep every sample where it is. Anything else may work on time (aresample, asetpts, atrim,
+    // adelay, atempo, apad, loudnorm...): what was not looked at does not get through.
+    private static readonly HashSet<string> TimelessAudioFilters = new(StringComparer.Ordinal) { "volume", "anull", "aformat", "pan" };
 
-    // Output containers whose audio start was measured to read as the source's. An MPEG-TS result starts at 1.4 s, for
-    // instance; others were not measured.
-    private static readonly HashSet<string> AudioStartOutputs = new(StringComparer.Ordinal) { "mp4", "mov", "matroska" };
+    // Video filters that put frames at other times than the source's.
+    private static readonly HashSet<string> VideoTimeFilters = new(StringComparer.Ordinal) { "setpts", "trim", "select", "tpad", "loop", "reverse" };
+
+    // Source containers whose positions the check reads and whose assembly was measured against the source. AVI and
+    // MPEG-TS included, with their own rules (see SyncCheck). Others (MPEG-PS, ASF, FLV...) were not measured.
+    private static readonly HashSet<string> CheckedInputs = new(StringComparer.Ordinal)
+    {
+        "matroska,webm", "matroska", "webm", "mov,mp4,m4a,3gp,3g2,mj2", "mov", "mp4", "avi", "mpegts",
+    };
+
+    private static readonly HashSet<string> CheckedInputExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mkv", ".webm", ".mp4", ".m4v", ".mov", ".avi", ".ts", ".m2ts", ".mts",
+    };
+
+    // Output containers measured. An MPEG-TS result starts at 1.4 s, for instance; the others were not measured.
+    private static readonly HashSet<string> CheckedOutputs = new(StringComparer.Ordinal) { "mp4", "mov", "matroska" };
 
     /// <summary>
-    /// Why the audio's start cannot be compared between a source and the result of this assembly (null: it can). Refused: what
-    /// moves the audio on Emby's own request (-async fills from 0, input or output offsets and seeks, -copyts keeping the file's
-    /// start, audio filters working on time, -avoid_negative_ts moving every stream), and the containers left out above.
-    /// -shortest does not count: it cuts the end, not the start.
+    /// Why the result of this command could not be proved in step with its source, null when it can: the planner then leaves the
+    /// conversion to Emby's ffmpeg from the start, with no time lost encoding what would be rejected at the end. Refused: what moves
+    /// streams on Emby's request (offsets, seeks, -async, -copyts keeping the file's start, audio filters working on time,
+    /// -avoid_negative_ts moving every stream), source streams not written 0:N (which streams they mean is then not known), and the
+    /// containers left out above. -shortest does not count: it only cuts the end, which the check compares.
     /// </summary>
-    public static string? WhyAudioStartIsNotCompared(IReadOnlyList<string> assembly)
+    public static string? WhyResultCannotBeVerified(IReadOnlyList<string> assembly)
     {
         int firstInput = IndexOf(assembly, "-i");
         int lastInput = assembly.ToList().LastIndexOf("-i");
         if (firstInput < 0 || lastInput + 2 >= assembly.Count)
             return "commande inattendue";
-        string? inputFormat = null, outputFormat = null;
+        string? inputFormat = null, outputFormat = null, negativeTs = null;
         bool copyTs = false, startAtZero = false;
         for (int i = 0; i < assembly.Count - 1; i++)
         {
             string a = assembly[i];
             string next = assembly[i + 1];
-            if (a is "-async" or "-ss" or "-sseof" or "-itsoffset" or "-output_ts_offset")
+            if (TimeOptions.Contains(a.Split(':')[0]))
                 return a;
             if (a == "-copyts")
                 copyTs = true;
@@ -501,17 +519,64 @@ public static class EmbyConversionPlanner
                 inputFormat = next;
             else if (a == "-f" && i > lastInput)
                 outputFormat = next;
-            else if (a == "-avoid_negative_ts" && next != "disabled")
-                return $"{a} {next}";
-            else if ((a == "-af" || a.StartsWith("-filter:a", StringComparison.Ordinal)) && AudioMovingFilters.Any(f => next.Contains(f, StringComparison.Ordinal)))
-                return "filtre audio";
+            else if (a == "-avoid_negative_ts")
+                negativeTs = next;
+            else if ((a is "-c:a" or "-acodec" or "-codec:a" || a.StartsWith("-c:a:", StringComparison.Ordinal) || a.StartsWith("-codec:a:", StringComparison.Ordinal))
+                && i > lastInput && SyncCheck.AudioPriming(next) is null)
+                return $"encodeur audio {next}";
+            else if ((a == "-af" || a.StartsWith("-filter:a", StringComparison.Ordinal))
+                && ArgTemplateValidator.FilterNames(next).FirstOrDefault(f => !TimelessAudioFilters.Contains(f)) is { } audioFilter)
+                return $"filtre audio {audioFilter}";
         }
+        if (negativeTs is not (null or "disabled"))
+            return $"-avoid_negative_ts {negativeTs}";
         if (copyTs && !startAtZero)
             return "-copyts sans -start_at_zero";
         string input = assembly[firstInput + 1];
-        if (inputFormat is null ? !AudioStartInputExtensions.Contains(Path.GetExtension(input)) : !AudioStartInputs.Contains(inputFormat))
+        if (inputFormat is null ? !CheckedInputExtensions.Contains(Path.GetExtension(input)) : !CheckedInputs.Contains(inputFormat))
             return $"format source {inputFormat ?? Path.GetExtension(input)}";
-        return outputFormat != null && AudioStartOutputs.Contains(outputFormat) ? null : $"format de sortie {outputFormat ?? "inconnu"}";
+        if (outputFormat is null || !CheckedOutputs.Contains(outputFormat))
+            return $"format de sortie {outputFormat ?? "inconnu"}";
+        // Without "disabled", ffmpeg moves every stream of a Matroska file by its most negative timestamp (the audio's priming).
+        if (negativeTs is null && outputFormat == "matroska")
+            return "-avoid_negative_ts absent";
+        return AssemblySourceMaps(assembly) is null ? "pistes source désignées autrement que 0:N" : null;
+    }
+
+    /// <summary>
+    /// The encoder Emby asks for each of the first <paramref name="audioStreams"/> audio streams of an assembly ("copy" when copied),
+    /// null where it names none. The last matching option wins, as in ffmpeg.
+    /// </summary>
+    public static string?[] AssemblyAudioEncoders(IReadOnlyList<string> assembly, int audioStreams)
+    {
+        var encoders = new string?[audioStreams];
+        for (int i = Math.Max(0, assembly.ToList().LastIndexOf("-i")); i + 1 < assembly.Count; i++)
+        {
+            string a = assembly[i];
+            if (a is "-c:a" or "-acodec" or "-codec:a")
+                Array.Fill(encoders, assembly[i + 1]);
+            else if ((a.StartsWith("-c:a:", StringComparison.Ordinal) || a.StartsWith("-codec:a:", StringComparison.Ordinal))
+                && int.TryParse(a.AsSpan(a.LastIndexOf(':') + 1), NumberStyles.None, CultureInfo.InvariantCulture, out int k) && k < audioStreams)
+                encoders[k] = assembly[i + 1];
+        }
+        return encoders;
+    }
+
+    /// <summary>Time of one output frame when a command sets the frame rate (-r), null otherwise.</summary>
+    public static double? OutputFrameTime(IReadOnlyList<string> args)
+    {
+        for (int i = 0; i + 1 < args.Count; i++)
+        {
+            if (args[i] != "-r" && !args[i].StartsWith("-r:", StringComparison.Ordinal))
+                continue;
+            string[] parts = args[i + 1].Split('/');
+            if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double rate))
+                return null;
+            if (parts.Length == 2 && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double den) && den > 0)
+                rate /= den;
+            return rate > 0 ? 1 / rate : null;
+        }
+        return null;
     }
 
     /// <summary>

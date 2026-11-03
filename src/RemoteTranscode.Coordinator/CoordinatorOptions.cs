@@ -152,6 +152,12 @@ public sealed class CoordinatorOptions
     /// </summary>
     public double? EncodeSeekMarginSeconds { get; set; }
 
+    /// <summary>
+    /// Seconds added to the listed length of the concat list's middle chunk, which moves every chunk after it: a really desynchronized
+    /// assembly, for the bench to see it rejected. Null in production.
+    /// </summary>
+    public double? EncodeTestListedDurationShift { get; set; }
+
     /// <summary>The server as a report describes it: "Linux x64, Emby 4.10.2" (set by the Emby plugin).</summary>
     public string ServerDescription { get; set; } =
         $"{(OperatingSystem.IsWindows() ? "Windows" : OperatingSystem.IsLinux() ? "Linux" : OperatingSystem.IsMacOS() ? "macOS" : "other OS")} " +

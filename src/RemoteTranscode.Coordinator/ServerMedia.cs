@@ -161,8 +161,13 @@ public sealed class ServerMedia(CoordinatorOptions options)
             return result;
         // A video without presentation times on its packets (AVI with packed B-frames, placeholder frames): runs
         // seeking into it do not meet at the same frame, so it is not cut at all (no boundary: one slice).
+        // MPEG-TS likewise: ffmpeg seeks on its PCR, ahead of the frames' times by the muxer's delay, so a run seeking to a frame
+        // lands up to 0.7 s past it, on the next keyframe (measured with ffmpeg 9.0.2: 18 frames lost per slice). A run from the
+        // start needs no seek: one slice.
         double fileStart = 0;
-        if (await FramesAroundAsync(path, times, token, s => fileStart = s) is not { } frames)
+        string? format = null;
+        if (await FramesAroundAsync(path, times, token, (s, f) => (fileStart, format) = (s, f)) is not { } frames
+            || format?.Contains("mpegts", StringComparison.Ordinal) == true)
             return result;
         // For each time, the smallest presentation time at or after it. A window always contains that frame (and the
         // keyframe before it), so it is the true next frame.
@@ -181,6 +186,19 @@ public sealed class ServerMedia(CoordinatorOptions options)
             result[i] = new Boundary(frames[k].Time, keyframe, frames[k].Position, smallestGap, fileStart);
         }
         return result;
+    }
+
+    /// <summary>
+    /// Where the first frame comes out of the decoder, from the file's start (<see cref="MediaProbe.ParseFirstFrame"/>): where
+    /// the assembly must start the video. Null when it could not be read.
+    /// </summary>
+    public async Task<double?> FirstFrameAsync(string path, CancellationToken token)
+    {
+        return await MediaProbe.FirstFrameAsync(async args =>
+        {
+            var (code, output, error) = await RunAsync(options.ServerFfprobe, args, token);
+            return code == 0 ? output : throw new InvalidOperationException($"ffprobe a échoué : {Tail(error)}");
+        }, path);
     }
 
     /// <summary>
@@ -213,7 +231,7 @@ public sealed class ServerMedia(CoordinatorOptions options)
     /// presentation order. One ffprobe pass that reads packets only (no decoding). Null when ffprobe fails or a packet
     /// has no presentation time.
     /// </summary>
-    private async Task<List<(double Time, long? Position, bool Key)>?> FramesAroundAsync(string path, IReadOnlyList<double> times, CancellationToken token, Action<double>? onFileStart = null)
+    private async Task<List<(double Time, long? Position, bool Key)>?> FramesAroundAsync(string path, IReadOnlyList<double> times, CancellationToken token, Action<double, string?>? onFileStart = null)
     {
         static string F(double v) => v.ToString("0.######", CultureInfo.InvariantCulture);
         // "V": video but not cover art. Each interval seeks to the keyframe before its start and reads past the time;
@@ -222,15 +240,20 @@ public sealed class ServerMedia(CoordinatorOptions options)
         string intervals = string.Join(",", times.Select(t => t <= 0 ? "%+#60" : $"{F(Math.Max(0, t - 5))}%{F(t + 5)}"));
         var (code, output, _) = await RunAsync(options.ServerFfprobe,
             ["-v", "error", "-select_streams", "V:0", "-read_intervals", intervals,
-             "-show_entries", "packet=pts_time,pos,flags:format=start_time", "-print_format", "json", path], token);
+             "-show_entries", "packet=pts_time,pos,flags:format=start_time,format_name", "-print_format", "json", path], token);
         if (code != 0)
             return null;
         using var doc = JsonDocument.Parse(output);
         double start = 0;
-        if (doc.RootElement.TryGetProperty("format", out var format) && format.TryGetProperty("start_time", out var st)
-            && double.TryParse(st.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double s))
-            start = s;
-        onFileStart?.Invoke(start);
+        string? name = null;
+        if (doc.RootElement.TryGetProperty("format", out var format))
+        {
+            if (format.TryGetProperty("start_time", out var st) && double.TryParse(st.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double s))
+                start = s;
+            if (format.TryGetProperty("format_name", out var fn))
+                name = fn.GetString();
+        }
+        onFileStart?.Invoke(start, name);
         var frames = new List<(double Time, long? Position, bool Key)>();
         if (doc.RootElement.TryGetProperty("packets", out var packets))
             foreach (var p in packets.EnumerateArray())
