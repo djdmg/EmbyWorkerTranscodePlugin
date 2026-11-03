@@ -99,6 +99,7 @@ public sealed record WorkerLoad(double CpuPercent, double? GpuPercent, double Me
 [JsonDerivedType(typeof(ShimStartAdvice), "startAdvice")]
 [JsonDerivedType(typeof(ShimServerSpeed), "serverSpeed")]
 [JsonDerivedType(typeof(ConversionProgress), "conversionProgress")]
+[JsonDerivedType(typeof(WorkerUpdateHint), "updateHint")]
 public abstract record Message;
 
 // ---- Worker <-> coordinator -------------------------------------------------------------
@@ -149,6 +150,12 @@ public sealed record JobProgress(string JobId, long Frame, double Fps, double Ti
 public sealed record JobEnded(string JobId, int ExitCode, string? Error, double? InputStart = null, double? SeekCorrection = null) : Message;
 
 public sealed record CancelJob(string JobId, string Reason) : Message;
+
+/// <summary>
+/// Coordinator to worker: a worker of at least this version is wanted. Deliberately nothing but a version number: no URL,
+/// path or hash. The worker may check GitHub sooner, and what it then installs depends on GitHub alone (WorkerUpdatePolicy).
+/// </summary>
+public sealed record WorkerUpdateHint(string MinimumVersion) : Message;
 
 // ---- Shim <-> coordinator ---------------------------------------------------------------
 

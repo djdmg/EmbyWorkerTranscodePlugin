@@ -30,10 +30,54 @@ public sealed class WorkerHost
     public WorkerCapabilities? Capabilities { get; private set; }
     public WorkerService? Service { get; private set; }
     public string? Error { get; private set; }
+
+    /// <summary>Tray mode only: the setup closes and relaunches the tray application, not a console "run".</summary>
+    public WorkerUpdater? Updater { get; set; }
     public bool Starting { get; private set; }
 
     /// <summary>A start, stop or restart is in progress (the UI disables the buttons that would queue another one).</summary>
     public bool Busy => lifecycle.CurrentCount == 0;
+
+    // Outlives a service replaced during the update's short announcement (settings saved, restart).
+    private volatile bool updateDraining;
+
+    /// <summary>Free for an update: no start or stop going on, no job, none lately. A worker with no service has no job.</summary>
+    public bool IsIdleForUpdate() => !Busy && !Starting && (Service?.IsIdleForUpdate() ?? true);
+
+    /// <summary>False if a job or a lifecycle change got there first. On true, no new job is accepted until <see cref="EndUpdate"/>.</summary>
+    public async Task<bool> TryBeginUpdateAsync()
+    {
+        if (!await lifecycle.WaitAsync(0))
+            return false;
+        WorkerService? service;
+        try
+        {
+            service = Service;
+            if (service?.TryBeginUpdateDrain() == false)
+                return false;
+            updateDraining = true;
+        }
+        finally
+        {
+            lifecycle.Release();
+        }
+        try
+        {
+            if (service != null)
+                await service.AnnounceStateAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"état non transmis au serveur : {ex.Message}");
+        }
+        return true;
+    }
+
+    public void EndUpdate()
+    {
+        updateDraining = false;
+        Service?.EndUpdateDrain();
+    }
 
     public bool IsPaired => Config.CoordinatorUrl != null && Config.ProtectedToken != null;
 
@@ -84,7 +128,12 @@ public sealed class WorkerHost
             // GPU tone mapping switched off in the settings: not announced, so the coordinator sends this worker no
             // conversion tone mapped on the GPU, and playback is tone mapped on the CPU.
             var published = Config.GpuToneMapping ? Capabilities : Capabilities with { GpuToneMapping = null };
-            Service = new WorkerService(Config, published, Logger.Log);
+            Service = new WorkerService(Config, published, Logger.Log)
+            {
+                UpdateHintReceived = version => Updater?.OnCoordinatorHint(version),
+            };
+            if (updateDraining)
+                Service.TryBeginUpdateDrain();
             cts = new CancellationTokenSource();
             var token = cts.Token;
             runTask = Task.Run(async () =>

@@ -622,6 +622,9 @@ public sealed class Dispatcher(CoordinatorOptions options, ILogger<Dispatcher> l
                 }
                 logger.LogInformation("Worker {Name}: ffmpeg {Version}, encoders [{Encoders}], max {Max} jobs, {State}",
                     worker.Identity.Name, hello.Capabilities.FfmpegVersion, string.Join(",", hello.Capabilities.VideoEncoders), hello.MaxJobs, hello.State);
+                // Only a nudge to check sooner; a worker before the updater logs it as an unknown message and carries on.
+                if (WorkerUpdatePolicy.NeedsUpdateHint(hello.Version))
+                    await TrySend(worker, new WorkerUpdateHint(WorkerUpdatePolicy.MinimumWorkerVersion));
                 CapacityChanged?.Invoke();
                 break;
             case WorkerHeartbeat hb:

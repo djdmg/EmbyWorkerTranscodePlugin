@@ -57,6 +57,16 @@ public sealed class WorkerConfig
     public bool GpuToneMapping { get; set; } = true;
     public AvailabilitySettings Availability { get; set; } = new();
 
+    /// <summary>
+    /// Installs new versions of the worker from the project's GitHub releases (see WorkerUpdater). On by default, also for
+    /// a worker.json written before this option: the box in the settings says what it does, and
+    /// <see cref="AutoUpdateNoticeShown"/> tells it once. Off: no contact with GitHub at all.
+    /// </summary>
+    public bool AutoUpdate { get; set; } = true;
+
+    /// <summary>The tray has announced <see cref="AutoUpdate"/> once on this PC.</summary>
+    public bool AutoUpdateNoticeShown { get; set; }
+
     /// <summary>Configuration, logs and caches. EMBY_WORKER_HOME overrides it (several workers on one PC for tests).</summary>
     public static string Directory { get; } = Environment.GetEnvironmentVariable("EMBY_WORKER_HOME") is { Length: > 0 } home
         ? Path.GetFullPath(home)

@@ -82,6 +82,11 @@ public sealed partial class WorkerService(WorkerConfig config, WorkerCapabilitie
     private DateTime? connectedAt;
     private volatile AvailabilityDecision decision = new(WorkerState.Offline, "démarrage", ReclaimAction.None);
     private WorkerLoad lastLoad = new(0, null, 0, 0);
+    // An offer is checked and registered as one step, and an update starts only with no job registered: never both.
+    private readonly object offerGate = new();
+    private volatile bool updateDraining;
+    private long lastJobActivityTicks = DateTime.UtcNow.Ticks;
+    private const string UpdateReason = "mise à jour en cours";
 
     public IReadOnlyCollection<JobRunner> Jobs => jobs.Values.ToArray();
     public bool Connected => socket?.State == WebSocketState.Open;
@@ -105,6 +110,37 @@ public sealed partial class WorkerService(WorkerConfig config, WorkerCapabilitie
         await SendAsync(Heartbeat());
         await StopAllJobsAsync("released: libération demandée par l'utilisateur");
     }
+
+    /// <summary>"Minimum version" hint of the coordinator; set by the host, handled by the updater.</summary>
+    public Action<string>? UpdateHintReceived { get; set; }
+
+    /// <summary>No job at all, and none for a while (a gap between two slices of a conversion is not a free moment).</summary>
+    public bool IsIdleForUpdate() =>
+        WorkerUpdatePolicy.IsIdle(jobs.Count, new DateTime(Interlocked.Read(ref lastJobActivityTicks), DateTimeKind.Utc), DateTime.UtcNow);
+
+    /// <summary>
+    /// Refuses new jobs from now on if there is none running, else false: an update never stops a job. Unlike a release,
+    /// nothing is persisted (Enabled stays as it is), so the worker comes back available after the update.
+    /// </summary>
+    public bool TryBeginUpdateDrain()
+    {
+        lock (offerGate)
+        {
+            if (!jobs.IsEmpty)
+                return false;
+            updateDraining = true;
+            decision = new AvailabilityDecision(WorkerState.Unavailable, UpdateReason, ReclaimAction.None);
+            return true;
+        }
+    }
+
+    /// <summary>Tells the coordinator now rather than at the next heartbeat, so it does not offer a job in vain.</summary>
+    public Task AnnounceStateAsync() => SendAsync(Heartbeat());
+
+    /// <summary>The update did not happen: the availability loop gives the real state back within a second.</summary>
+    public void EndUpdateDrain() => updateDraining = false;
+
+    private void MarkJobActivity() => Interlocked.Exchange(ref lastJobActivityTicks, DateTime.UtcNow.Ticks);
 
     /// <summary>Stops every running job (application exit or explicit release) and waits briefly for them.</summary>
     public async Task StopAllJobsAsync(string reason)
@@ -229,16 +265,26 @@ public sealed partial class WorkerService(WorkerConfig config, WorkerCapabilitie
         switch (message)
         {
             case JobOffer offer:
-                string? refusal = CheckOffer(offer);
-                if (refusal != null)
+                var inputCache = Cache;
+                string? refusal;
+                JobRunner? runner = null;
+                lock (offerGate)
+                {
+                    refusal = CheckOffer(offer);
+                    if (refusal is null)
+                    {
+                        runner = new JobRunner(offer, config, capabilities, http!, SendAsync, log, inputCache);
+                        // Registered before answering so the slot is counted by the next heartbeat and offer check.
+                        jobs[offer.JobId] = runner;
+                        MarkJobActivity();
+                    }
+                }
+                if (runner is null)
                 {
                     log($"refused job {offer.JobId}: {refusal}");
                     await SendAsync(new JobAnswer(offer.JobId, false, refusal));
                     return;
                 }
-                var runner = new JobRunner(offer, config, capabilities, http!, SendAsync, log, Cache);
-                // Registered before answering so the slot is counted by the next heartbeat and offer check.
-                jobs[offer.JobId] = runner;
                 await SendAsync(new JobAnswer(offer.JobId, true, null));
                 _ = Task.Run(async () =>
                 {
@@ -253,6 +299,7 @@ public sealed partial class WorkerService(WorkerConfig config, WorkerCapabilitie
                     finally
                     {
                         jobs.TryRemove(offer.JobId, out _);
+                        MarkJobActivity();
                     }
                 });
                 break;
@@ -273,10 +320,14 @@ public sealed partial class WorkerService(WorkerConfig config, WorkerCapabilitie
                 break;
             case PrefetchHint hint when Cache is { } cache && http is { } client && config.CoordinatorUrl is { } url:
                 // A playback this worker is expected to take over: its source is fetched ahead into the cache.
+                MarkJobActivity();
                 string key = InputCache.KeyOf(hint.File.Name, hint.File.Size);
                 cache.Attach(key, hint.File.Size, $"{url.TrimEnd('/')}/prefetch/{hint.GrantId}", hint.Token, client);
                 cache.Prefetch(key, hint.Ranges.Select(r => (r.Offset, r.Length)));
                 log($"préchargement de {hint.File.Name} pour une lecture à reprendre ({hint.Ranges.Sum(r => r.Length) >> 20} Mo)");
+                break;
+            case WorkerUpdateHint updateHint:
+                UpdateHintReceived?.Invoke(updateHint.MinimumVersion);
                 break;
         }
     }
@@ -287,6 +338,8 @@ public sealed partial class WorkerService(WorkerConfig config, WorkerCapabilitie
         // The job id becomes a directory name under JobsDirectory: only accept the coordinator's 16-hex format.
         if (!JobIdFormat().IsMatch(offer.JobId))
             return "malformed job id";
+        if (updateDraining)
+            return UpdateReason;
         // "Busy" only means "all slots used" when last evaluated (once a second); the live counts decide below.
         var state = CurrentState();
         if (state is not (WorkerState.Available or WorkerState.Busy))
@@ -348,6 +401,8 @@ public sealed partial class WorkerService(WorkerConfig config, WorkerCapabilitie
         var sample = new AvailabilitySample(DateTime.Now, config.Available, SystemSignals.UserIdle(), SystemSignals.OnBattery(),
             lastLoad, ActiveJobs, config.MaxJobs, socket?.State == WebSocketState.Open);
         var next = engine.Evaluate(sample);
+        if (updateDraining)
+            next = new AvailabilityDecision(WorkerState.Unavailable, UpdateReason, ReclaimAction.None);
         var previous = decision;
         decision = next;
 
