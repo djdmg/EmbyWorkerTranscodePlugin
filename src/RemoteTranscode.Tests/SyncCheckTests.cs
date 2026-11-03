@@ -299,6 +299,14 @@ public class SyncCheckTests
     }
 
     [Fact]
+    public void An_aac_whose_last_packet_says_10_ms_more_passes_but_one_packet_more_does_not()
+    {
+        var video = Video(Grid(0, Frame25, Duration));
+        Assert.Null(SyncCheck.Verify(Source(), 0, File(0, video, Audio(1, "aac", Grid(-AacPriming, AacPacket, Duration), AacPacket, 0, end: Duration + 0.010)), Encoded, [310]));
+        Assert.Contains("finissant", SyncCheck.Verify(Source(), 0, File(0, video, Audio(1, "aac", Grid(-AacPriming, AacPacket, Duration + AacPacket), AacPacket, 0, end: Duration + AacPacket)), Encoded, [310]));
+    }
+
+    [Fact]
     public void An_encoder_padding_its_last_packet_may_end_later_but_not_earlier()
     {
         var video = Video(Grid(0, Frame25, Duration));

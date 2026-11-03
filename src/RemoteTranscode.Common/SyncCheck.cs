@@ -419,8 +419,9 @@ public static class SyncCheck
                 if (near[i] - near[i - 1] < measured / 4)
                     return Reason($"vidéo décalée à {near[i]:0.000}s : images superposées");
         }
-        // AVI: the last decoded frame has no time, the end is known to 2 frames at best (see VerifyVideoSpan).
-        double endTolerance = approximate ? 3 * measured
+        // AVI: the last decoded frame has no time, the end is known to 2 frames at best (see VerifyVideoSpan), and the decoder's delay added to the
+        // last decoding time overshoots by up to that delay (0.16 s of delay on packed B-frames: last frame exactly 3 frames before the estimate).
+        double endTolerance = approximate ? Math.Max(3 * measured, dtsDelay + measured)
             : sameRate && Math.Abs(Remainder(end - first, sourceFrame)) <= OnGrid ? Tolerance
             : measured + Tolerance;
         if (Math.Abs(to[^1] - end) > endTolerance)
@@ -517,9 +518,11 @@ public static class SyncCheck
         // An encoder gives back every sample and its last packet says so (0 to 0.2 ms measured): this is what shows a shift by whole packets
         // lasting to the end, which leaves the grid alone. MP3 pads its last packet (17 ms measured), so only a stream ending early is seen
         // there. A copied stream's last packet reads its container's idea of its length (11 ms apart measured, Matroska to MP4), but its
-        // packets were compared one by one.
+        // packets were compared one by one. AAC copied through the file prepared ahead keeps every packet where it was, but with Emby's ffmpeg 5.1
+        // its last packet says 10 ms more (10.667 ms read 20.667 ms, on two real files; same packets, same count, same times). That moves nothing:
+        // half a packet still tells a shift by whole packets, and the grid above tells anything smaller.
         double sourceEnd = from[^1].Time + (from[^1].Length > 0 ? from[^1].Length : sourceStep), resultEnd = to[^1].Time + (to[^1].Length > 0 ? to[^1].Length : resultStep);
-        double late = copied || PadsLastPacket(encoder) ? margin + Tolerance : 2 * Tolerance;
+        double late = copied || PadsLastPacket(encoder) ? margin + Tolerance : encoder == "aac" ? resultStep / 2 + Tolerance : 2 * Tolerance;
         double early = copied ? margin + Tolerance : 2 * Tolerance;
         if (resultEnd - sourceEnd > late || sourceEnd - resultEnd > early)
             return Reason($"{name} finissant à {resultEnd:0.000}s au lieu de {sourceEnd:0.000}s");

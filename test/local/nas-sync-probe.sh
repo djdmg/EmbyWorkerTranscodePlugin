@@ -166,7 +166,7 @@ if fs is not None and first is not None and video_s and video_r:
             near = [t for t in frames_r if w <= t <= w + WINDOW]
             over = any(b - a < out_frame / 4 for a, b in zip(near, near[1:]))
             judge(abs(worst) <= tol and not over, "video window %.3f: %d frames, worst %s, on the grid: %s, tolerance %s%s" % (w, len(sw), ms(worst), grid, ms(tol), ", OVERLAP" if over else ""))
-        end_tol = 3 * out_frame if approximate else TOLERANCE if same and abs(rem(frames_s[-1] - first, src_frame)) <= ON_GRID else out_frame + TOLERANCE
+        end_tol = max(3 * out_frame, delay + out_frame) if approximate else TOLERANCE if same and abs(rem(frames_s[-1] - first, src_frame)) <= ON_GRID else out_frame + TOLERANCE
         judge(abs(frames_r[-1] - frames_s[-1]) <= end_tol, "video end: last frame %.6f for %.6f (%s, tolerance %s)" % (frames_r[-1], frames_s[-1], ms(frames_r[-1] - frames_s[-1]), ms(end_tol)))
     else:
         judge(False, "no video packet read")
@@ -214,7 +214,7 @@ for i, (s, r) in enumerate(zip(audio_s, audio_r)):
         judge(gone <= 2 * margin + TOLERANCE and (off <= TOLERANCE or not source_on),
               "audio %d window %.3f: nearest sound %s (limit %s), result off its grid by %s, source on its own: %s" % (i + 1, w, ms(gone), ms(2 * margin + TOLERANCE), ms(off), source_on))
     end_s, end_r = from_s[-1][0] + from_s[-1][1], to[-1][0] + to[-1][1]
-    late = margin + TOLERANCE if enc == "copy" or enc not in ("aac", "ac3", "eac3", "libopus", "opus", "flac") else 2 * TOLERANCE
+    late = margin + TOLERANCE if enc == "copy" or enc not in ("aac", "ac3", "eac3", "libopus", "opus", "flac") else sr_step / 2 + TOLERANCE if enc == "aac" else 2 * TOLERANCE
     early = margin + TOLERANCE if enc == "copy" else 2 * TOLERANCE
     judge(end_r - end_s <= late and end_s - end_r <= early, "audio %d end: %.6f for %.6f (%s, limits +%s -%s)" % (i + 1, end_r, end_s, ms(end_r - end_s), ms(late), ms(early)))
 
