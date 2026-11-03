@@ -1020,7 +1020,16 @@ public sealed partial class EncodeQueue : IJobOwner
         {
             if (run.Task.Slices.Any(s => !s.Done && !s.IsRunning))
                 return false;
-            busy = [.. BusyWorkers(run.Task).Keys];
+            var workers = BusyWorkers(run.Task);
+            busy = [.. workers.Keys];
+            // Nor to a worker clearly slower than the server on what is left of this slice: the server keeps it.
+            // (Not measured yet, the worker still takes over: the server is the machine of last resort.)
+            double left = SecondsLeft(run.Task, run.Slice);
+            var machines = workers.Select(w => Machine(run.Task, w.Key, w.Value, false))
+                .Concat(dispatcher.Workers.Where(w => w.IsOpen && w.Hello != null && !workers.ContainsKey(w.Identity.Id)).Select(w => Machine(run.Task, w.Identity.Id, null, true)))
+                .Where(m => !run.Task.FailedWorkers.Contains(m.Id))
+                .Append(new SliceEndgame.Machine(LocalWorkerName, workerSpeeds.GetValueOrDefault(LocalWorkerName), 0, false, false)).ToList();
+            busy.AddRange(SliceEndgame.Decide(machines, [left], left).Firm);
         }
         return dispatcher.HasCapacityFor(run.Requirements, excluded: busy);
     }
@@ -1035,6 +1044,7 @@ public sealed partial class EncodeQueue : IJobOwner
         int startIndex;
         double startSeconds;
         List<string> avoid;
+        List<string>? thenAvoid = null;
         EncodeSlice? next;
         var resume = await ResumePointAsync(task, slice, token);
         lock (gate)
@@ -1045,10 +1055,11 @@ public sealed partial class EncodeQueue : IJobOwner
             var ending = EndingWorkers(task);
             // Without the workers refused conversions: a slice reserved for one (it came back with an older version) is released.
             var connected = dispatcher.Workers.Where(w => w.IsOpen && w.Hello != null && w.ConversionsRefused is null).Select(w => w.Identity.Id).ToHashSet();
+            var endgame = Endgame(task, slice, busy, ending, connected);
             if (slice.ReservedFor is { } reservee)
             {
                 bool othersLeft = task.Slices.Any(s => s != slice && !s.Done && !s.IsRunning && s.ReservedFor is null);
-                if (!connected.Contains(reservee) || !othersLeft || task.FailedWorkers.Contains(reservee))
+                if (!connected.Contains(reservee) || !othersLeft || task.FailedWorkers.Contains(reservee) || endgame.Preferred.Contains(reservee))
                     slice.ReservedFor = null;   // gone, or the end of the conversion: the fastest finisher takes it
                 else if (busy.ContainsKey(reservee) && !ending.Contains(reservee))
                     return true;                // its worker is still on its current slice and already fetching this one
@@ -1058,7 +1069,13 @@ public sealed partial class EncodeQueue : IJobOwner
             var reservees = task.Slices.Where(s => !s.Done && !s.IsRunning && s.ReservedFor != null).Select(s => s.ReservedFor!).ToHashSet();
             avoid = slice.ReservedFor is { } only
                 ? connected.Where(id => id != only).ToList()
-                : [.. busy.Keys.Where(id => !ending.Contains(id) || reservees.Contains(id)), .. SlowerThanTheBusy(task, slice, busy, connected), .. task.FailedWorkers];
+                : [.. busy.Keys.Where(id => !ending.Contains(id) || reservees.Contains(id)), .. endgame.Firm, .. task.FailedWorkers];
+            // End of the conversion: the clearly slower machines come second, offered only if the faster ones do not take it.
+            if (slice.ReservedFor is null && endgame.Preferred.Except(avoid).ToList() is { Count: > 0 } second)
+            {
+                thenAvoid = connected.Except(second).ToList();
+                avoid = [.. avoid, .. second];
+            }
             // Chunks that do not follow each other cannot be resumed from: the slice starts over.
             if (!task.Consistent(slice))
                 task.Chunks.RemoveAll(c => c.Index >= slice.FirstChunk && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice);
@@ -1099,7 +1116,7 @@ public sealed partial class EncodeQueue : IJobOwner
         }
         // Each offered job is linked before its offer leaves (onCreated), so owner callbacks the worker's receive
         // loop processes before StartJobAsync returns (JobEnded, worker lost) find the slice through SliceOf.
-        var (job, why) = await dispatcher.StartJobAsync(plan, JobKind.Background, this, Describe(task, slice), token,
+        Task<(Job? Job, string? Reason)> Offer(List<string> excluded) => dispatcher.StartJobAsync(plan, JobKind.Background, this, Describe(task, slice), token,
             onCreated: created =>
             {
                 lock (gate)
@@ -1113,7 +1130,27 @@ public sealed partial class EncodeQueue : IJobOwner
                     }
                 }
             },
-            avoid: avoid);
+            avoid: excluded);
+        var (job, why) = await Offer(avoid);
+        if (job is null && thenAvoid != null)
+        {
+            // No faster machine took it: in the same pass, so a slice never waits for one that is gone or unavailable.
+            // Only if no owner callback ended this run meanwhile, as below.
+            bool again;
+            lock (gate)
+            {
+                again = slice.IsRunning && slice.Worker != LocalWorkerName && task.IsActive;
+                if (again)
+                {
+                    slice.Worker = OfferMarker;
+                    slice.JobId = null;
+                    if (next != null && !next.IsRunning)
+                        next.ReservedFor = null;
+                }
+            }
+            if (again)
+                (job, why) = await Offer(thenAvoid);
+        }
         if (job is null)
         {
             bool stillClaimed, nothingRuns, alongside, reservedRefused = false;
@@ -1139,7 +1176,7 @@ public sealed partial class EncodeQueue : IJobOwner
                 // a worker (already fetched ahead) or, at the end, a busy worker would finish it clearly sooner.
                 alongside = stillClaimed && !nothingRuns && options.EncodeLocalAlongsideWorkers && slice.ReservedFor is null
                     && !task.Slices.Any(s => s.Worker == LocalWorkerName)
-                    && !SlowerThanTheBusy(task, slice, BusyWorkers(task), [LocalWorkerName]).Any();
+                    && Endgame(task, slice, BusyWorkers(task), [], [LocalWorkerName]).Firm.Count == 0;
                 // A reserved slice is offered to its worker only: refused (the worker is connected but unavailable,
                 // e.g. its PC got busy), the reservation is dropped so any machine takes it from the next pass, and the
                 // slices after it are still offered in this pass. Before, the pass stopped at this slice and the
@@ -1312,35 +1349,28 @@ public sealed partial class EncodeQueue : IJobOwner
     }
 
     /// <summary>
-    /// End of a conversion (no more waiting slices than busy workers): an idle worker is passed over for this slice
-    /// when a busy one would still finish it clearly sooner, counting what that one has left of its current slice.
-    /// Without measured speeds nobody is passed over. Call under the lock.
+    /// Who this slice is not offered to (<see cref="SliceEndgame"/>), from the speeds measured so far, kept across
+    /// conversions until the coordinator restarts. Workers set aside for this conversion do not count. Call under the lock.
     /// </summary>
-    private IEnumerable<string> SlowerThanTheBusy(EncodeTask task, EncodeSlice slice, Dictionary<string, EncodeSlice> busy, HashSet<string> connected)
+    private SliceEndgame.Outcome Endgame(EncodeTask task, EncodeSlice slice, Dictionary<string, EncodeSlice> busy, HashSet<string> ending, HashSet<string> connected)
     {
-        int waiting = task.Slices.Count(s => !s.Done && !s.IsRunning);
-        if (waiting > busy.Count || busy.Count == 0)
-            yield break;
-        double length = (slice.Last ? task.Source?.DurationSeconds ?? slice.End : slice.End) - task.EncodedEnd(slice);
-        double? bestBusy = null;
-        foreach (var (id, current) in busy)
-        {
-            if (!workerSpeeds.TryGetValue(id, out double speed) || speed <= 0.05)
-                continue;
-            double end = current.Last ? task.Source?.DurationSeconds ?? current.End : current.End;
-            double finish = Math.Max(0, end - Math.Max(current.Position, current.Start)) / speed + length / speed;
-            bestBusy = bestBusy is null ? finish : Math.Min(bestBusy.Value, finish);
-        }
-        if (bestBusy is null)
-            yield break;
-        foreach (string id in connected)
-        {
-            if (busy.ContainsKey(id) || !workerSpeeds.TryGetValue(id, out double speed) || speed <= 0.05)
-                continue;
-            if (bestBusy.Value < 0.8 * length / speed)
-                yield return id;
-        }
+        var machines = busy.Select(b => Machine(task, b.Key, b.Value, ending.Contains(b.Key)))
+            .Concat(connected.Where(id => !busy.ContainsKey(id)).Select(id => Machine(task, id, null, true)))
+            .Where(m => !task.FailedWorkers.Contains(m.Id)).ToList();
+        var waiting = task.Slices.Where(s => !s.Done && !s.IsRunning).OrderBy(s => s.Index).Select(s => SecondsToEncode(task, s)).ToList();
+        return SliceEndgame.Decide(machines, waiting, SecondsToEncode(task, slice));
     }
+
+    private SliceEndgame.Machine Machine(EncodeTask task, string id, EncodeSlice? current, bool canTake) =>
+        new(id, workerSpeeds.GetValueOrDefault(id), current is null ? 0 : SecondsLeft(task, current), current is null, canTake);
+
+    /// <summary>Source seconds still to encode of a waiting slice.</summary>
+    private static double SecondsToEncode(EncodeTask task, EncodeSlice s) =>
+        Math.Max(0, (s.Last ? task.Source?.DurationSeconds ?? s.End : s.End) - task.EncodedEnd(s));
+
+    /// <summary>Source seconds the current run of a slice has left.</summary>
+    private static double SecondsLeft(EncodeTask task, EncodeSlice s) =>
+        Math.Max(0, (s.Last ? task.Source?.DurationSeconds ?? s.End : s.End) - Math.Max(s.Position, s.Start));
 
     private static string Describe(EncodeTask task, EncodeSlice slice) =>
         $"conversion {task.Id} tranche {slice.Index + 1}/{task.Slices.Count} {Path.GetFileName(task.Input)}";

@@ -229,6 +229,13 @@ public static class EmbyConversionPlanner
 
     // Input formats whose timestamps ffmpeg never corrects for discontinuities: there, the audio's timestamps do not
     // depend on whether the video is read too (with MPEG-TS, a jump in the video would move the audio as well).
+    // MPEG-TS stays out, measured on 2026-11-03 with generated files, both assemblies run as planned, ffmpeg 9.0.2 only
+    // (Emby's 5.1, whose discontinuity handling is older, was not available). Start at 1.4 s, 33-bit wrap mid-file and a
+    // 5 s gap: same file, byte for byte, except -copyts alone across the wrap (audio packets the same, but both assemblies
+    // lose 40 % of them; the check of the prepared file refuses it). A 5000 s jump, forward, backward or with the audio
+    // 12 s after the video: with -copyts each stream's audio packets are the same (pts, size, content) but the file is
+    // not, the packets being in another order from the jump on, and the check of the prepared file lets the forward
+    // jumps through. Not identical, and only a shorter assembly to gain on few files.
     private static readonly HashSet<string> AheadInputFormats = new(StringComparer.Ordinal)
     {
         "matroska,webm", "matroska", "webm", "mov,mp4,m4a,3gp,3g2,mj2", "mov", "mp4", "avi",
