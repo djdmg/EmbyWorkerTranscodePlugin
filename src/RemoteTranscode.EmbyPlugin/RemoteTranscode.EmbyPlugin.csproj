@@ -57,6 +57,7 @@
       <_Parameter2>$(IssueReportToken)</_Parameter2>
     </AssemblyAttribute>
     <EmbeddedResource Include="Web\remotetranscode.js" LogicalName="RemoteTranscode.EmbyPlugin.Web.remotetranscode.js" />
+    <EmbeddedResource Include="Web\librarydiagnostic.js" LogicalName="RemoteTranscode.EmbyPlugin.Web.librarydiagnostic.js" />
     <EmbeddedResource Include="$(ShimPackages)\*.gz" LogicalName="RemoteTranscode.EmbyPlugin.Shim.%(Filename)%(Extension)" />
   </ItemGroup>
 
@@ -69,6 +70,17 @@
                       Lines="$([MSBuild]::Escape($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\Web\remotetranscode.html').Replace('__plugin/remotetranscodejs', '__plugin/remotetranscode$(PageSuffix)js'))))" />
     <ItemGroup>
       <EmbeddedResource Include="$(VersionedPage)" LogicalName="RemoteTranscode.EmbyPlugin.Web.remotetranscode.html" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="VersionDiagnosticPageNames" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <VersionedDiagnosticPage>$(IntermediateOutputPath)librarydiagnostic.html</VersionedDiagnosticPage>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(VersionedDiagnosticPage)" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="$([MSBuild]::Escape($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\Web\librarydiagnostic.html').Replace('__plugin/librarydiagnosticjs', '__plugin/librarydiagnostic$(PageSuffix)js'))))" />
+    <ItemGroup>
+      <EmbeddedResource Include="$(VersionedDiagnosticPage)" LogicalName="RemoteTranscode.EmbyPlugin.Web.librarydiagnostic.html" />
     </ItemGroup>
   </Target>
 

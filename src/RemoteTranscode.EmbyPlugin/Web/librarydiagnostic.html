@@ -1,0 +1,42 @@
+<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/librarydiagnosticjs" data-title="Diagnostic de la bibliothèque">
+    <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
+        <div class="rtd-page">
+            <style>
+                .rtd-page table { width: 100%; border-collapse: collapse; margin: .5em 0 1em; }
+                .rtd-page th, .rtd-page td { text-align: left; padding: .45em .6em; border-bottom: 1px solid rgba(128,128,128,.25); vertical-align: top; }
+                .rtd-page th { font-weight: 500; opacity: .7; white-space: nowrap; }
+                .rtd-page .rtd-badge { display: inline-block; padding: .1em .55em; border-radius: 1em; font-size: .85em; color: #fff; white-space: nowrap; }
+                .rtd-page .rtd-muted { opacity: .65; font-size: .9em; }
+                .rtd-page .rtd-error { color: #e85c5c; }
+                .rtd-page .rtd-path { word-break: break-all; }
+                .rtd-page details { margin: .5em 0; }
+                .rtd-page summary { cursor: pointer; font-weight: 500; }
+            </style>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Diagnostic de la bibliothèque</h2>
+                <p>Repère à l'avance les vidéos à risque pour une conversion par tranches. Pour lancer l'analyse : Tableau de bord, Tâches planifiées, catégorie « Transcodage distribué », « Diagnostic de la bibliothèque ». C'est aussi là qu'on l'arrête. Elle ne se lance jamais seule.</p>
+                <p class="rtd-muted">Un fichier à la fois, en priorité minimale, en pause pendant une lecture ou une conversion. Reprise possible : les fichiers inchangés (chemin, taille, date) ne sont pas relus. Compter quelques secondes par fichier, davantage sur un serveur modeste ou des fichiers 4K ; pauses comprises, une première analyse de 10 000 fichiers prend de l'ordre d'une journée.</p>
+                <p class="rtd-state"></p>
+                <p class="rtd-error rtd-load-error"></p>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Résultats</h2>
+                <p class="rtd-totals"></p>
+                <div class="rtd-categories"></div>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Ce que cette analyse ne voit pas</h2>
+                <ul class="rtd-limits rtd-muted"></ul>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Fichiers concernés</h2>
+                <p class="rtd-muted">Les chemins ne sont visibles que des administrateurs. Ils ne sont jamais écrits dans le journal ni dans les signalements d'échecs.</p>
+                <div class="rtd-files"></div>
+            </div>
+        </div>
+    </div>
+</div>
