@@ -6,6 +6,15 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.41 — 03/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.41). Worker inchangé (0.7.20).
+
+### Corrigé
+
+- **Plugin** — Une image de trop à la fin d'un AVI sans temps de présentation pouvait passer : le temps de sa dernière image n'est connu qu'à 3 images près. Les images sont désormais comptées des deux côtés, sans décodage, et doivent être en nombre égal ; un paquet d'un octet n'est pas une image. Pas de compte quand la cadence de sortie diffère de celle de la source, y compris un fichier annonçant 23,976 i/s avec une image toutes les 40 ms. Mesuré sur de vrais AVI de plusieurs familles.
+- **Plugin** — Une conversion correcte d'un AVI dont les paquets MP3 sautent de paquets entiers était rejetée (−10,2 ms à 29,340 s) : le ffmpeg d'Emby seul donne les mêmes paquets aux mêmes endroits. La grille de la piste encodée n'est plus jugée sur une telle source ; les emplacements du son et la fin de piste le restent. Limite connue : sur une telle source, un décalage d'une fraction de paquet (environ 23 ms) n'est plus vu. Mesuré sur le son lui-même, sans dérive : de −9,5 à +19,8 ms le long du fichier, dans les sauts de 52 ms de la source.
+
 ## Plugin 0.7.40 — 03/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.40). Worker inchangé (0.7.20).

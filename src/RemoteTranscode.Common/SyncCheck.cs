@@ -108,6 +108,26 @@ public sealed record MediaProbe(double? FileStart, double? Duration, string? For
         ["-v", "error", "-select_streams", "V:0", "-read_intervals", further ? "%+15" : "%+#32",
          "-show_entries", "frame=best_effort_timestamp_time:format=start_time", "-print_format", "json", path];
 
+    /// <summary>The ffprobe arguments that list the size of each packet of a stream: reads all of it, without decoding.</summary>
+    public static string[] FrameCountArgs(string path, int stream) =>
+        ["-v", "error", "-select_streams", stream.ToString(CultureInfo.InvariantCulture), "-show_entries", "packet=size", "-of", "csv=p=0", path];
+
+    /// <summary>The frames in what <see cref="FrameCountArgs"/> lists: every packet of more than a byte. Null when a line is not a size, or none is listed.</summary>
+    public static long? ParseFrameCount(string sizes)
+    {
+        long frames = 0;
+        bool any = false;
+        foreach (string line in sizes.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!long.TryParse(line.TrimEnd(','), NumberStyles.None, CultureInfo.InvariantCulture, out long size))
+                return null;
+            any = true;
+            if (size > 1)
+                frames++;
+        }
+        return any ? frames : null;
+    }
+
     /// <summary>The first frame's time (see <see cref="ParseFirstFrame"/>), with ffprobe behind <paramref name="probe"/>.</summary>
     public static async Task<double?> FirstFrameAsync(Func<string[], Task<string>> probe, string path) =>
         ParseFirstFrame(await probe(FirstFrameArgs(path))) ?? ParseFirstFrame(await probe(FirstFrameArgs(path, further: true)));
@@ -322,8 +342,33 @@ public static class SyncCheck
         VideoSpan? sourceSpan = Span(source, first), resultSpan = Span(result, null);
         string? problem = sourceSpan is null || resultSpan is null
             ? $"vérification impossible : fin de la vidéo illisible ({(sourceSpan is null ? "source" : "résultat")})"
-            : SourceInfo.VerifyVideoSpan(sourceSpan, resultSpan) ?? Verify(source, first, result, expected, windows);
+            : SourceInfo.VerifyVideoSpan(sourceSpan, resultSpan) ?? Verify(source, first, result, expected, windows)
+                ?? await FrameCountProblemAsync(probe, sourcePath, source, resultPath, result, expected);
         return new SyncVerdict(problem, summary, sourceSpan, resultSpan);
+    }
+
+    /// <summary>
+    /// A source without presentation times (AVI): its last frame's time is only known to 3 frames, so a frame too many or too few after the last
+    /// window would pass the rules on times. Its frames can be counted instead, every packet being one frame, a packed B-frame's empty placeholder
+    /// of 6 or 8 bytes included, but not a packet of one byte, which gives no frame (133603 packets, one of a byte, for 133602 frames; equal on
+    /// families of real files otherwise). Reads the whole video stream, without decoding (3 s for 630 MB). Not comparable when the output's frame
+    /// rate differs from the source's: a file may say 23.976 and hold frames every 40 ms, which Emby's -r turns into another number of frames
+    /// (59508 for 57072, same length), hence the mean rate too.
+    /// </summary>
+    private static async Task<string?> FrameCountProblemAsync(Func<string[], Task<string>> probe, string sourcePath, MediaProbe source, string resultPath, MediaProbe result, SyncExpectation expected)
+    {
+        if (source.Video is not { } from || result.Video is not { } to || !from.Packets.Any(p => p.Pts is null))
+            return null;
+        double frame = expected.OutputFrame ?? to.FrameSeconds;
+        if (from.FrameSeconds <= 0 || frame <= 0
+            || Math.Abs(from.FrameSeconds - frame) > 0.002 * frame
+            || (from.AverageFrameSeconds is > 0 && Math.Abs(from.AverageFrameSeconds - frame) > 0.002 * frame))
+            return null;
+        long? sourceFrames = MediaProbe.ParseFrameCount(await probe(MediaProbe.FrameCountArgs(sourcePath, from.Index)));
+        long? resultFrames = MediaProbe.ParseFrameCount(await probe(MediaProbe.FrameCountArgs(resultPath, to.Index)));
+        if (sourceFrames is not > 0 || resultFrames is not > 0)
+            return $"vérification impossible : nombre d'images illisible ({(sourceFrames is not > 0 ? "source" : "résultat")})";
+        return sourceFrames == resultFrames ? null : Reason($"vidéo de {resultFrames} images au lieu de {sourceFrames}");
     }
 
     // Where the video starts and ends, for the length check. Null when its end could not be read.
@@ -502,6 +547,10 @@ public static class SyncCheck
         var results = to.Select(p => p.Time).ToList();
         double margin = Math.Max(sourceStep, resultStep);
         double gridDrift = 0;
+        // A source whose packets jump by whole packets (AVI with MP3: 52 ms apart then 0, every few seconds, measured): each jump moves ffmpeg's packets
+        // by a fraction of its own (10 ms), the same in a conversion by ffmpeg alone, and the source's sound has no place more exact than that.
+        // Its grid says nothing there: the sound's places and the stream's end still apply.
+        bool sourceJumps = !copied && windows.Any(w => HasJump(starts.Where(t => t >= w && t <= w + WindowSeconds), sourceStep));
         foreach (double w in windows)
         {
             var inSource = starts.Where(t => t >= w && t <= w + WindowSeconds).ToList();
@@ -528,7 +577,7 @@ public static class SyncCheck
             // grid may drift slowly (AVI with MP3: 3713 packets at most 0.023 ms short, -3.3 ms at 1079 s, the same in Emby's own conversion). A shift is
             // a jump between windows. A hole in the source may move the grid too (then its own grid moved, and nothing can be said of a fraction of a
             // packet here); otherwise, a jump means a shift. A drift away from the source shows at the sound's places and at the end.
-            if (inSource.All(t => Math.Abs(Remainder(t - from[0].Time, sourceStep)) <= Tolerance))
+            if (!sourceJumps && inSource.All(t => Math.Abs(Remainder(t - from[0].Time, sourceStep)) <= Tolerance))
                 foreach (double t in inResult)
                 {
                     if (Remainder(t - to[0].Time - gridDrift, resultStep) is var off && Math.Abs(off) > Tolerance)
@@ -550,6 +599,19 @@ public static class SyncCheck
         if (resultEnd - sourceEnd > late || sourceEnd - resultEnd > early)
             return Reason($"{name} finissant à {resultEnd:0.000}s au lieu de {sourceEnd:0.000}s");
         return null;
+    }
+
+    // Two packets in a row apart by a whole packet more or less than the stream's step.
+    private static bool HasJump(IEnumerable<double> sorted, double step)
+    {
+        double? last = null;
+        foreach (double t in sorted)
+        {
+            if (last is { } previous && Math.Abs(t - previous - step) > step / 2)
+                return true;
+            last = t;
+        }
+        return false;
     }
 
     // Encoders whose last packet is not cut to the samples it holds: all but those measured exact.

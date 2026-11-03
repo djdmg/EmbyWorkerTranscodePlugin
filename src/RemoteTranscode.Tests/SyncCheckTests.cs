@@ -310,6 +310,25 @@ public class SyncCheckTests
     }
 
     [Fact]
+    public void A_source_jumping_by_whole_packets_leaves_the_encoded_grid_unjudged_but_not_the_sound()
+    {
+        const double mp3Packet = 1152.0 / 44100;
+        var video = Video(Grid(0, Frame25, Duration));
+        // The source's packets, one of them a packet late every 30 s, the next one right behind it: 52 ms then 0, as measured on an AVI with MP3.
+        var jumping = Grid(0, mp3Packet, Duration).Select((t, k) => k > 0 && k % 1148 == 0 ? t + mp3Packet : t).OrderBy(t => t).ToList();
+        var source = File(0, video, Audio(1, "mp3", jumping, mp3Packet, 0, 44100));
+        var every30 = Grid(0, 30, Duration - 30).ToArray();
+        // ffmpeg's packets, moved by 10 ms past 150 s.
+        double[] Moved(double from, double by) => Grid(-AacPriming, AacPacket, Duration).Select(t => t >= from ? t + by : t).ToArray();
+        Assert.Null(SyncCheck.Verify(source, 0, File(0, video, Audio(1, "aac", Moved(150, 0.010), AacPacket, 0, end: Duration + 0.010)), Encoded, every30));
+        // Sound moved by far more than the jumps explain is still seen.
+        Assert.Contains("audio 1 décalé", SyncCheck.Verify(source, 0, File(0, video, Audio(1, "aac", Moved(150, 0.2), AacPacket, 0, end: Duration + 0.2)), Encoded, every30));
+        // The same 10 ms without a jump in the source stays a shift.
+        var steady = File(0, video, Audio(1, "mp3", Grid(0, mp3Packet, Duration), mp3Packet, 0, 44100));
+        Assert.Contains("audio 1 décalé", SyncCheck.Verify(steady, 0, File(0, video, Audio(1, "aac", Moved(150, 0.010), AacPacket, 0, end: Duration + 0.010)), Encoded, every30));
+    }
+
+    [Fact]
     public void An_aac_may_end_a_packet_late_but_not_two()
     {
         var video = Video(Grid(0, Frame25, Duration));
@@ -458,6 +477,68 @@ public class SyncCheckTests
         Assert.Null(verdict.Problem);
         Assert.NotNull(verdict.Source);
         Assert.Equal(2, asked.Count(a => a.Any(x => x.Contains("%+#400", StringComparison.Ordinal))));
+    }
+
+    // An AVI (no presentation times) and its conversion, as the whole run reads them; the counts are what ffprobe finds in the whole video stream.
+    private static string Sizes(int count, params int[] others) => string.Join("\n", Enumerable.Repeat("8", count).Concat(others.Select(o => o.ToString()))) + "\n";
+
+    private static Task<SyncVerdict> RunAvi(string? sourceCount, string? resultCount, double? outputFrame = Frame25, List<string[]>? counted = null, string averageRate = "25/1") =>
+        SyncCheck.RunAsync(a =>
+        {
+            bool isSource = a[^1] == "s";
+            if (a.Contains("packet=size"))
+            {
+                counted?.Add(a);
+                string? n = isSource ? sourceCount : resultCount;
+                return Task.FromResult(n ?? "");
+            }
+            if (a.Any(x => x.StartsWith("frame=", StringComparison.Ordinal)))
+                return Task.FromResult("""{ "frames": [ { "best_effort_timestamp_time": "0.000000" } ], "format": { "start_time": "0.000000" } }""");
+            var packets = !a.Contains("-read_intervals") && !a.Contains("-select_streams") ? [] : Grid(0, Frame25, Duration).Select(t => isSource
+                ? FormattableString.Invariant($$"""{ "stream_index": 0, "dts_time": "{{t:0.000000}}", "duration_time": "0.040000" }""")
+                : FormattableString.Invariant($$"""{ "stream_index": 0, "pts_time": "{{t:0.000000}}", "dts_time": "{{t:0.000000}}", "duration_time": "0.040000" }""")).ToList();
+            return Task.FromResult($$"""
+                { "packets": [{{string.Join(",", packets)}}],
+                  "streams": [ { "index": 0, "codec_type": "video", "codec_name": "h264", "r_frame_rate": "25/1", "avg_frame_rate": "{{(isSource ? averageRate : "25/1")}}", "start_time": "0.000000", "height": 720 } ],
+                  "format": { "format_name": "{{(isSource ? "avi" : "mov,mp4")}}", "start_time": "0.000000", "duration": "{{Duration}}" } }
+                """);
+        }, "s", "r", new SyncExpectation([], [], outputFrame), []);
+
+    [Fact]
+    public async Task An_avi_with_a_frame_too_many_or_too_few_is_rejected_on_its_count()
+    {
+        Assert.Null((await RunAvi(Sizes(15000), Sizes(15000))).Problem);
+        Assert.Contains("15001 images au lieu de 15000", (await RunAvi(Sizes(15000), Sizes(15001))).Problem);
+        Assert.Contains("14999 images au lieu de 15000", (await RunAvi(Sizes(15000), Sizes(14999))).Problem);
+    }
+
+    [Fact]
+    public async Task A_packet_of_one_byte_is_no_frame()
+    {
+        // 133603 packets, one of a byte, for 133602 frames on a real file; its placeholders of 6 or 8 bytes are frames.
+        Assert.Null((await RunAvi(Sizes(15000, 1), Sizes(15000))).Problem);
+        Assert.Contains("images au lieu de", (await RunAvi(Sizes(15000, 1), Sizes(15001))).Problem);
+    }
+
+    [Fact]
+    public async Task An_avi_whose_frames_cannot_be_counted_is_rejected()
+    {
+        Assert.Contains("vérification impossible", (await RunAvi(null, Sizes(15000))).Problem);
+        Assert.Contains("vérification impossible", (await RunAvi(Sizes(15000), null)).Problem);
+        Assert.Contains("vérification impossible", (await RunAvi("not a size\n", Sizes(15000))).Problem);
+    }
+
+    [Fact]
+    public async Task Frames_are_not_counted_at_another_frame_rate_nor_without_an_avi()
+    {
+        var counted = new List<string[]>();
+        // -r 30 on a 25 fps AVI lays frames on a grid of its own: another number of frames is right. Rejected on its times here, not on a count.
+        await RunAvi(Sizes(15000), Sizes(18000), 1.0 / 30, counted);
+        Assert.Empty(counted);
+        // A file saying one rate and holding frames at another (a real AVI: 23.976 said, 25 held): the count is not comparable either.
+        var result = await RunAvi(Sizes(59508), Sizes(57072), Frame25, counted, "24000/1001");
+        Assert.Empty(counted);
+        Assert.DoesNotContain("images au lieu de", result.Problem ?? "");
     }
 
     // ---- Reading ----

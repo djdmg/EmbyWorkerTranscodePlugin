@@ -8,6 +8,15 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.41 — 2026-11-03
+
+Built and published by GitHub Actions (release v0.7.41). Worker unchanged (0.7.20).
+
+### Fixed
+
+- **Plugin** — A frame too many at the end of an AVI without presentation times could pass: its last frame's time is known to 3 frames only. Frames are now counted on both sides, without decoding, and must be equal; a packet of one byte is no frame. Not counted when the output's frame rate differs from the source's, including a file saying 23.976 fps and holding a frame every 40 ms. Measured on real AVI files of several kinds.
+- **Plugin** — A correct conversion of an AVI whose MP3 packets jump by whole packets was rejected (-10.2 ms at 29.340 s): Emby's own ffmpeg gives the same packets at the same places. The encoded grid is no longer judged on such a source; the sound's places and the stream's end still are. Known limit: on such a source a shift of a fraction of a packet (about 23 ms) is no longer seen. Measured on the sound itself, without drift: -9.5 to +19.8 ms along the file, within the source's own jumps of 52 ms.
+
 ## Plugin 0.7.40 — 2026-11-03
 
 Built and published by GitHub Actions (release v0.7.40). Worker unchanged (0.7.20).
