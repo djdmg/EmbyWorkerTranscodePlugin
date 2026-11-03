@@ -157,13 +157,17 @@ internal static class Setup
 
             long total = Math.Max(1, files.Sum(f => f.Entry.Length));
             long done = 0;
+            // Its own budget: an antivirus can take a file between the check and its copy, and a failure here would
+            // leave files of both versions.
+            var retry = LockedFileRetry.ForInstall();
             foreach (var (entry, target) in files)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 progress.Report((5 + (int)(80 * done / total), "Copie de " + entry.FullName.Replace('/', '\\') + "…"));
-                entry.ExtractToFile(target, overwrite: true);
+                retry.Run(() => entry.ExtractToFile(target, overwrite: true));
                 done += entry.Length;
             }
+            LogWait(retry, "copie");
         }
 
         try { File.Delete(oldUninstaller); } catch (IOException) { } catch (UnauthorizedAccessException) { }
@@ -367,17 +371,18 @@ internal static class Setup
         return p.ExitCode == 0;
     }
 
-    /// <summary>Throws, with nothing modified, if any existing target file cannot be overwritten.</summary>
+    /// <summary>
+    /// Throws, with nothing modified, if any existing target file cannot be overwritten. The worker asked to exit a
+    /// moment ago can still hold its exe, so a locked file gets some time to be released first.
+    /// </summary>
     private static void EnsureWritable(IEnumerable<string> targets)
     {
+        var retry = LockedFileRetry.ForInstall();
         foreach (string target in targets)
         {
-            if (!File.Exists(target))
-                continue;
             try
             {
-                // Exclusive write access is exactly what the overwrite needs (fails on a running exe or a loaded DLL).
-                using var _ = new FileStream(target, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                retry.Run(() => LockedFileRetry.CheckWritable(target));
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
@@ -385,6 +390,13 @@ internal static class Setup
                                       "Fermez Emby Remote Worker puis relancez l'installation. Aucun fichier n'a été modifié.", e);
             }
         }
+        LogWait(retry, "vérification");
+    }
+
+    private static void LogWait(LockedFileRetry retry, string step)
+    {
+        if (retry.Waited > TimeSpan.Zero)
+            Log($"fichiers verrouillés pendant la {step} : attente de {retry.Waited.TotalSeconds:0.##} s");
     }
 
     private static void WriteManifest(string folder, IEnumerable<string> relativePaths)

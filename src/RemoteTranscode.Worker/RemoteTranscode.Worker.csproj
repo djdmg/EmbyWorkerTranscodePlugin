@@ -30,6 +30,7 @@
   <ItemGroup>
     <Compile Include="..\RemoteTranscode.Installer\Setup.cs" Link="Installer\Setup.cs" />
     <Compile Include="..\RemoteTranscode.Installer\ShellLink.cs" Link="Installer\ShellLink.cs" />
+    <Compile Include="..\RemoteTranscode.Installer\LockedFileRetry.cs" Link="Installer\LockedFileRetry.cs" />
   </ItemGroup>
 
 </Project>
