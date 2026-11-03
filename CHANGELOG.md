@@ -8,6 +8,56 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.36 and worker 0.7.20 — 2026-11-03
+
+Built and published by GitHub Actions (release v0.7.36). Workers need 0.7.19 at least to receive conversion slices. Worker 0.7.20 is the first one that can update itself: going from an older worker to 0.7.20 is done by hand, once.
+
+### Added
+
+- **Plugin** — A/V sync check of a conversion's result over the whole file, failing closed (`SyncCheck`). The shim reads the source and the result with Emby's ffprobe, packets only, in windows of 1.5 s: the assembly's chunk boundaries (32 at most, evenly picked), at least the file's quarters, each stream's start and the end. The check itself decodes only the source's first frame, from its first packets. A missing or unreadable value rejects the file, as does a ffprobe still running after 180 s: the result is deleted and Emby's own command converts on the server. Each comparison counts from the source's file start:
+  - Video start: the result's first frame where the source's first frame comes out of the decoder, within 3 ms.
+  - Video through the file: each source frame of a window has a result frame within 3 ms when both run at the same rate and the source lies on its own grid; otherwise within half an output frame plus 3 ms. Two frames closer than a quarter of a frame are rejected as an overlap.
+  - Video end: within 3 ms under the same conditions, otherwise one output frame plus 3 ms; for a source without presentation times, 3 frames or the decoder's delay plus one frame, whichever is larger. The video's length check stays: 1.5 frames, 3 without presentation times.
+  - Audio, each stream on its own, same number of streams: the first packet at the source's start minus the encoder's priming, within 3 ms (samples: AAC 1024, MP3 1105, AC-3 and E-AC-3 256, Opus 312, MP2 481, Vorbis 128, FLAC, ALAC, DTS and PCM 0). A copied stream's first packet is compared with the source's first packet, and its packets one by one in the windows, within 3 ms. An encoded stream has other packets: sound in the same places (within 2 packets plus 3 ms) and packets on the grid its first packet set (within 3 ms), unless the source's own grid moves there.
+  - Audio end: 6 ms for an encoded stream; AAC may end up to half a packet plus 3 ms late; a copied stream within a packet plus 3 ms; an encoder padding its last packet (MP3, for instance) may end up to a packet plus 3 ms late.
+- **Plugin** — Commands whose result could not be compared stay on Emby's ffmpeg from the start, before anything is encoded (`WhyResultCannotBeVerified`): `-async`, `-ss`, `-sseof`, `-to`, `-t`, `-itsoffset`, `-output_ts_offset`, `-itsscale`; `-copyts` without `-start_at_zero`; `-avoid_negative_ts` other than `disabled`, or absent for a Matroska output; audio filters other than `volume`, `anull`, `aformat`, `pan`; audio encoders without a measured priming; sources other than Matroska/WebM, MP4/MOV, AVI and MPEG-TS; outputs other than MP4, MOV and Matroska; source streams not written `0:N`. The planner also refuses the video filters `setpts`, `trim`, `select`, `tpad`, `loop`, `reverse`. Such a conversion does not appear in the plugin's history; the reason is in Emby's ffmpeg log.
+- **Plugin** — Slice-shift check before assembly (`SliceShiftCheck`): the coordinator reads the first frames of a worker run from its first chunk. A run more than 3/4 of an output frame from where it should start rejects the conversion, and so does a run starting 10 s or more into the file whose first frame cannot be placed. Failure report with the shifted-frames verdict, spool kept, Emby's command on the server.
+- **Plugin** — Monitoring page in the dashboard, « Suivi du transcodage » (in French): workers, conversions in progress, history with the reason of each failure (the 100 most recent, kept 7 days), Emby's queue length, refreshed every 5 s while shown. The shim's check line and a rejected assembly with audio converted ahead now reach the status.
+- **Plugin** — Audio-ahead switch on that page, off by default: `EncodeAudioAhead` is saved and applies to the conversions captured from then on, without a restart.
+- **Plugin** — Library diagnostic: a manual scheduled task and its own page, « Diagnostic de la bibliothèque », with `GET /RemoteTranscode/LibraryDiagnostic` (administrators only). It lists the video files at risk for a slice-based conversion: timestamp holes, packets without presentation times, variable frame rate, stored frame rate differing from the real one, video shorter than audio, video starting after the audio, file start read differently. One file at a time, lowest priority, paused during playbacks and conversions, resumable. Files are never modified.
+- **Worker** — Automatic update from the project's GitHub releases, on by default, with a box in the settings under the pairing and a one-time notice. The worker reads the latest release of the repository compiled into it at start, then about every 6 h, takes a setup only with the expected name and a strictly newer version, checks its SHA-256 and runs it with `--quiet` after 2 minutes without a job, refusing new ones meanwhile. A failed version waits 24 h. Unticked: no contact with GitHub at all. The coordinator can only ask for an earlier check: no URL, path or hash.
+- **Plugin** — Minimum worker version for conversions: workers older than 0.7.19, or with an unknown version, are offered no slice, and a conversion treats them as not connected. Playback is unaffected. The refusal shows in the status API (`conversionsRefused`, `conversionsRefusedLabel`), the plugin and monitoring pages, the conversion's note and give-up error, and one log warning per connection.
+
+### Fixed
+
+- **Plugin** — AVI with packed B-frames: the first chunk came out 40 to 120 ms early, followed by a hole (ffmpeg 9.0.2). The video now starts where the decoder gives its first frame.
+- **Plugin** — Last slice without `-r`: everything after the first chunk could be up to half a frame early. Chunk lengths now come from the frames, counted or measured in the chunks.
+- **Plugin** — MPEG-TS sources are now converted as one slice: a seek lands on the PCR, up to 0.7 s past the frame asked for, losing frames at each slice (18 per slice with ffmpeg 9.0.2).
+
+### Changed
+
+- **Plugin** — End of a conversion: a machine is passed over when the machines clearly faster than it (finishing in under 80 % of its time) would finish everything waiting before it finished this slice (`SliceEndgame`). With a free faster machine it comes second, offered in the same pass if nobody took the slice; with a busy one it waits, decided again at each pass. A worker with no measured speed goes after free measured ones only when these can take every waiting slice.
+- **Installer** — The check before installing and the file copy retry a locked file for up to 20 s. A quiet update that fails restarts the worker it closed.
+
+### Limits
+
+- The sync check reads timestamps, not picture or sound content: a frame or a packet at the right time with the wrong content is not seen. Only the windows are compared, so a fault that starts and ends between two of them is not seen either.
+- Under Emby's `-r` at another rate than the source, or where the source is off its own grid, a video shift of up to half an output frame (plus 3 ms: 23 ms at 25 fps) cannot be told from what ffmpeg's frame grid does on purpose, and is accepted.
+- An AVI with packed B-frames has no presentation time on many packets: its video is compared on decoding times, and its end to about 3 frames.
+- Encoded audio is compared on packet times: a fraction of a packet shows on the grid and whole packets at the stream's end. A shift of whole packets that does not reach the end shows only if it opens a gap larger than the tolerance in a window.
+- The slice-shift check does not judge server runs, runs without a seek, runs starting less than 10 s into the file or on a time that is not a known frame, or runs whose worker did not report its file start. It can miss a late run whose rounding pulls it back by more than a quarter of a frame.
+- An interrupted one-slice run (MPEG-TS, AVI with packed B-frames) still resumes with a seek. Only the checks above stand behind that case: this was not measured.
+- A file converted by Emby's own command, after a refusal or a rejection, does not go through the sync check.
+- The tolerances were measured with ffmpeg 9.0.2. `test/local/nas-sync-probe.sh` measures on the server what the check relies on with Emby's ffprobe. Conversions of real AVI and MPEG-TS files have not been run with this version.
+- The library diagnostic reads about 40 s of each file (start, five passages, end): a file that is not listed may still hold a defect elsewhere.
+- The setups are not code-signed, and the SHA-256 comes from the same release: automatic update trusts the project's GitHub account and repository. Untick it to install each version yourself. It only runs in tray mode, for a copy in its installation folder.
+- Both minimum versions are raised by hand. At 0.7.19, a worker with an updater is never below them, so the request for an earlier check is not sent to any such worker yet.
+
+### Bench
+
+- T27a expects the shifted-frames rejection.
+- T30, added: an assembly desynchronized on purpose (+12 ms, then +200 ms on one chunk) must be rejected and the file delivered by Emby's command correct; clean conversions of an AVI with packed B-frames and MP3 and of a 300 s MPEG-TS must not be rejected.
+
 ## Plugin 0.7.35 — 2026-11-02
 
 Built and published by GitHub Actions (release v0.7.35). Worker unchanged (0.7.19).

@@ -9,7 +9,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>RemoteTranscode.EmbyPlugin</AssemblyName>
     <RootNamespace>RemoteTranscode.EmbyPlugin</RootNamespace>
-    <Version>0.7.35</Version>
+    <Version>0.7.36</Version>
     <!-- Emby serves plugin pages under a URL that only changes with Emby's own version, so browsers keep old copies:
          the plugin version is part of the page names (see Plugin.PageSuffix). -->
     <!-- Letters and digits of the full version (0.6.3 -> 063, 0.7.0-beta.1 -> 070beta1): valid in a page name. -->

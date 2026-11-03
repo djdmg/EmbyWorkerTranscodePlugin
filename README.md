@@ -57,11 +57,16 @@ Safeguards: relay self-test at Emby startup, kill switch (`disabled` file), allo
    - The plugin page opens in a browser (desktop or mobile), not in the Emby Android app, which does not run the JavaScript of third-party plugins.
 3. Toward the end of a conversion, the coordinator takes into account the **measured speed** of each worker: it does not give a slice to a slow worker (or to the server) if a faster one would clearly finish it first.
 4. An interrupted slice (worker released or lost) resumes at its first missing chunk (from the source frame, read by ffprobe, where the previous run ended: ffmpeg lists chunk times on its own frame grid, up to half a frame off when the video does not start on it), on another worker, or on the server if no worker has been free for 20 s, then returns to a worker.
-5. When all slices are ready, the server **assembles** the file with Emby's command (video copied, Emby's audio and subtitles) and **verifies** it: total duration, then video duration **to the frame** (one and a half frames of tolerance, three for a source without presentation timestamps, whose end is only known to within two frames); if the end of the video cannot be read, the measurement is repeated and then the file is rejected; when in doubt, the file is rejected and the conversion is redone by Emby's ffmpeg.
+5. When all slices are ready, the coordinator first reads where each seeking worker run really starts (a run more than 3/4 of an output frame off, or one starting 10 s or more into the file that cannot be placed, rejects the conversion). The server then **assembles** the file with Emby's command (video copied, Emby's audio and subtitles) and **verifies** it, rejecting it when in doubt: total duration, video duration **to the frame** (one and a half frames of tolerance, three for a source without presentation timestamps), then, since 0.7.36, an **A/V sync check over the whole file** (`SyncCheck`). It reads packet timestamps with Emby's ffprobe, in windows of 1.5 s at the chunk boundaries (32 at most), at least the file's quarters, each stream's start and the end, and compares video and each audio stream: within 3 ms where positions are exact, within half an output frame plus 3 ms where the frame rates differ or the source is off its grid. A value that is missing or unreadable rejects the file: it is deleted and the conversion is redone by Emby's ffmpeg. A command whose result could not be compared (time offsets, seeks, audio filters working on time, video filters moving frames, unmeasured containers or audio encoders, maps not written `0:N`) stays on Emby's ffmpeg from the start.
    - The `concat.txt` assembly list gives the **exact duration of each chunk** (`duration` directive of the concat format, taken from the segment lists: a chunk lasts up to the start of the next one, and a slice's last chunk up to the slice's end when its listed end is within 20 ms of it, so each slice lasts exactly its length). Without it, Emby's ffmpeg 5.1 sometimes estimated an MPEG-TS chunk one frame too short: the next chunk overlapped and the video ended frames too early (seen on a 4K episode: 10 frames, 0.42 s, rejected by the frame-exact check).
    - A slice never ends with a chunk shorter than 2 s (its chunks are lengthened).
    - The coordinator log records the assembled chunks (`assembled from chunks`).
 6. GPU encoding available (QVBR for Intel QSV, `-cq` for NVIDIA NVENC), disabled by default. A single episode can therefore mix chunks from different encoders (QSV, NVENC, x264): their decoding parameters differ, but the changes happen at keyframes, as in adaptive streaming; full decoding without errors and playback verified on a Samsung TV.
+
+### Monitoring and diagnostic
+
+- **Monitoring page** « Suivi du transcodage » in Emby's dashboard (in French, administrators): workers, conversions in progress, history with the reason of each failure (the 100 most recent, kept 7 days), Emby's queue length, refreshed every 5 s while shown. It also holds the switch of the audio converted ahead (`EncodeAudioAhead`, off by default), for the conversions captured from then on.
+- **Library diagnostic** « Diagnostic de la bibliothèque » (in French, administrators): a scheduled task that only runs when started by hand, and its page, list the video files at risk for a slice-based conversion. One file at a time, lowest priority, paused during playbacks and conversions, resumable; about 40 s read per file (start, five passages, end), so a file not listed may still hold a defect elsewhere. Files are never modified.
 
 ### Automatic failure reports
 
@@ -72,6 +77,7 @@ When a conversion fails (assembly rejected by the check, a worker failing a slic
 - **Availability**: manual or automatic (idle PC), time windows, battery, load left by other applications (CPU, GPU, memory) with hysteresis; « Libérer le PC » (Release the PC) hands jobs back immediately, draining lets running playbacks finish.
 - **Local cache** of sources (4 MB blocks, at most 4 GB and a quarter of the free space): ffmpeg reads the movie through it, which enables prefetching and avoids re-reading the header and index on each resume.
 - **Update**: the installer asks the worker to close cleanly (its jobs resume elsewhere) and only forces it as a last resort (old version without this signal, or no exit within 20 s); it replaces the files while keeping the folder, settings and pairing, then restarts it.
+- **Automatic update** (since worker 0.7.20, on by default, box « Mises à jour » in the settings): the worker reads the latest release of this repository, compiled into it, at start and then about every 6 h, takes a setup only with the expected name and a strictly newer version, checks its SHA-256, and runs it with `--quiet` after 2 minutes without a job. Off: no contact with GitHub. The server can only ask for an earlier check. The setups are not code-signed, so this trusts the project's GitHub account and repository. A worker older than 0.7.20 must be updated by hand once.
 
 ### Security
 
@@ -120,8 +126,9 @@ Versions are set in `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.EmbyPlugin.c
 
 | Item | Version |
 |---|---|
-| Plugin | 0.7.35 |
-| Worker and installer | 0.7.19, with icon, GPU decoding and GPU tone mapping (needs Resizable BAR on NVIDIA and AMD cards), logs kept 7 days (FFmpeg "full" build: installer of about 218 MB instead of 170 MB). Workers 0.7.7 to 0.7.14 remain compatible but tone map on the processor and never receive conversions tone mapped on the GPU (also: 0.7.9 only shows the Emby queue counter during a job, 0.7.7 and 0.7.8 do not show it, 0.7.7 lacks conversion progress) |
+| Plugin | 0.7.36 |
+| Worker and installer | 0.7.20, with icon, GPU decoding and GPU tone mapping (needs Resizable BAR on NVIDIA and AMD cards), logs kept 7 days (FFmpeg "full" build: installer of about 218 MB instead of 170 MB), automatic update |
+| Minimum worker | 0.7.19 for conversions: an older worker, or one with an unknown version, gets no slice and still runs playbacks. The refusal shows in the status API, on the plugin and monitoring pages and in the log. |
 | Emby Server tested | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 without GPU); Emby's ffmpeg 5.1 (fork) |
 | Client tested | Emby Web in Chrome (hls.js player 1.6.0-beta.2) |
 | Workers tested | Windows 11 Enterprise, Intel Core Ultra 5 225U (x264 and QSV); PC with an RTX 4080 (x264 and NVENC, about 10x on a 1080p episode); FFmpeg 9.0.2 |
@@ -129,6 +136,8 @@ Versions are set in `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.EmbyPlugin.c
 
 ## Known limitations
 
+- The sync check reads timestamps, not picture or sound content, and only in its windows: a fault that starts and ends between two windows is not seen. Where Emby's `-r` differs from the source's rate, or the source is off its own grid, a video shift of up to half an output frame plus 3 ms is accepted, because ffmpeg's frame grid does that on purpose. An AVI with packed B-frames is compared on decoding times, and its end to about 3 frames. A file converted by Emby's own command does not go through this check. Conversions of real AVI and MPEG-TS files have not been run with 0.7.36.
+- MPEG-TS sources and AVI with packed B-frames are converted as one slice, so without the gain of several workers. An interrupted run still resumes with a seek, a case that was not measured.
 - Not yet tried on Emby for Windows, Emby under Docker or Linux arm64. The relay is embedded for these platforms, and a startup self-test keeps Emby on its own ffmpeg if the relay cannot run.
 - The plugin relies on Emby's "custom ffmpeg path" setting, modified through reflection. Emby marks this setting as unsupported, and a future Emby version could change it. The plugin detects this and then leaves everything untouched.
 - Playback started at the very beginning of the movie and then resumed elsewhere: the timestamps of the resumed segment step back by 80 ms (ffmpeg behaviour); no effect observed in Chrome.
