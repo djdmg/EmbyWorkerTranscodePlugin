@@ -78,6 +78,19 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             Name = "remotetranscodemonitor" + PageSuffix + "js",
             EmbeddedResourcePath = GetType().Namespace + ".Web.remotetranscodemonitor.js",
         },
+        new PluginPageInfo
+        {
+            Name = "librarydiagnostic" + PageSuffix,
+            DisplayName = "Diagnostic de la bibliothèque",
+            EmbeddedResourcePath = GetType().Namespace + ".Web.librarydiagnostic.html",
+            EnableInMainMenu = true,
+            MenuIcon = "assessment",
+        },
+        new PluginPageInfo
+        {
+            Name = "librarydiagnostic" + PageSuffix + "js",
+            EmbeddedResourcePath = GetType().Namespace + ".Web.librarydiagnostic.js",
+        },
     ];
 }
 

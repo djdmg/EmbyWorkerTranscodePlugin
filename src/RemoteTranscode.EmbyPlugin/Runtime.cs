@@ -109,6 +109,28 @@ public sealed class Runtime : IDisposable
 
     private static PluginConfiguration Config => Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
+    /// <summary>Emby's ffprobe and ffmpeg with their environment, for the library diagnostic; null until they were detected.</summary>
+    public ServerMedia? CreateServerMedia() => options is { } o ? new ServerMedia(o) : null;
+
+    /// <summary>
+    /// A conversion waiting or running, or a job on a worker, as a reason for background work to wait; null when none
+    /// is known. Emby's playbacks are read from its sessions by the caller. A conversion Emby runs alone is only seen
+    /// through its queue, which an Emby without a readable queue does not give.
+    /// </summary>
+    public string? ActivityReason()
+    {
+        if (syncQueue.Remaining() is > 0)
+            return "conversion en cours ou en attente";
+        if (app?.Services is { } services)
+        {
+            if (services.GetService<EncodeQueue>()?.Snapshot().Any(t => t.IsActive) == true)
+                return "conversion en cours";
+            if (services.GetService<Dispatcher>()?.Jobs.Any(j => j.Status is JobStatus.Offered or JobStatus.Running or JobStatus.Stopping) == true)
+                return "transcodage en cours";
+        }
+        return null;
+    }
+
     /// <summary>(Re)starts the coordinator and the relay, then applies the on/off switch to Emby's ffmpeg.</summary>
     public async Task StartAsync()
     {
