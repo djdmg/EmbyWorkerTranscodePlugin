@@ -448,6 +448,84 @@ public static class EmbyConversionPlanner
         static bool IsAudioSpec(string spec) => spec == "a" || spec.StartsWith("a:", StringComparison.Ordinal);
     }
 
+    // ---- Where the audio starts (see SourceInfo.VerifyAudioStarts) ----
+
+    // Audio filters that move sound in time (or can: aresample with async).
+    private static readonly string[] AudioMovingFilters = ["aresample", "asetpts", "atrim", "adelay", "atempo"];
+
+    // Source containers with exact times, whose streams start where they say. Not MPEG-TS (cut anywhere, a stream's first
+    // packets may not decode, and ffmpeg corrects its times) nor AVI (times may be approximate).
+    private static readonly HashSet<string> AudioStartInputs = new(StringComparer.Ordinal)
+    {
+        "matroska,webm", "matroska", "webm", "mov,mp4,m4a,3gp,3g2,mj2", "mov", "mp4",
+    };
+
+    private static readonly HashSet<string> AudioStartInputExtensions = new(StringComparer.OrdinalIgnoreCase) { ".mkv", ".webm", ".mp4", ".m4v", ".mov" };
+
+    // Output containers whose audio start was measured to read as the source's. An MPEG-TS result starts at 1.4 s, for
+    // instance; others were not measured.
+    private static readonly HashSet<string> AudioStartOutputs = new(StringComparer.Ordinal) { "mp4", "mov", "matroska" };
+
+    /// <summary>
+    /// Why the audio's start cannot be compared between a source and the result of this assembly (null: it can). Refused: what
+    /// moves the audio on Emby's own request (-async fills from 0, input or output offsets and seeks, -copyts keeping the file's
+    /// start, audio filters working on time, -avoid_negative_ts moving every stream), and the containers left out above.
+    /// -shortest does not count: it cuts the end, not the start.
+    /// </summary>
+    public static string? WhyAudioStartIsNotCompared(IReadOnlyList<string> assembly)
+    {
+        int firstInput = IndexOf(assembly, "-i");
+        int lastInput = assembly.ToList().LastIndexOf("-i");
+        if (firstInput < 0 || lastInput + 2 >= assembly.Count)
+            return "commande inattendue";
+        string? inputFormat = null, outputFormat = null;
+        bool copyTs = false, startAtZero = false;
+        for (int i = 0; i < assembly.Count - 1; i++)
+        {
+            string a = assembly[i];
+            string next = assembly[i + 1];
+            if (a is "-async" or "-ss" or "-sseof" or "-itsoffset" or "-output_ts_offset")
+                return a;
+            if (a == "-copyts")
+                copyTs = true;
+            else if (a == "-start_at_zero")
+                startAtZero = true;
+            else if (a == "-f" && i < firstInput)
+                inputFormat = next;
+            else if (a == "-f" && i > lastInput)
+                outputFormat = next;
+            else if (a == "-avoid_negative_ts" && next != "disabled")
+                return $"{a} {next}";
+            else if ((a == "-af" || a.StartsWith("-filter:a", StringComparison.Ordinal)) && AudioMovingFilters.Any(f => next.Contains(f, StringComparison.Ordinal)))
+                return "filtre audio";
+        }
+        if (copyTs && !startAtZero)
+            return "-copyts sans -start_at_zero";
+        string input = assembly[firstInput + 1];
+        if (inputFormat is null ? !AudioStartInputExtensions.Contains(Path.GetExtension(input)) : !AudioStartInputs.Contains(inputFormat))
+            return $"format source {inputFormat ?? Path.GetExtension(input)}";
+        return outputFormat != null && AudioStartOutputs.Contains(outputFormat) ? null : $"format de sortie {outputFormat ?? "inconnu"}";
+    }
+
+    /// <summary>
+    /// The source streams an assembly maps, in order, without the chunks' video. Null when a map is written another way
+    /// than "0:N" (the streams it means are then not known here).
+    /// </summary>
+    public static IReadOnlyList<int>? AssemblySourceMaps(IReadOnlyList<string> assembly)
+    {
+        var maps = new List<int>();
+        for (int i = 0; i + 1 < assembly.Count; i++)
+        {
+            if (assembly[i] != "-map" || assembly[i + 1] == "1:v:0")
+                continue;
+            string map = assembly[i + 1];
+            if (!map.StartsWith("0:", StringComparison.Ordinal) || !int.TryParse(map.AsSpan(2), NumberStyles.None, CultureInfo.InvariantCulture, out int stream))
+                return null;
+            maps.Add(stream);
+        }
+        return maps;
+    }
+
     /// <summary>Shortest chunk a run is planned to end with (see <see cref="ChunkArgs"/>).</summary>
     public const double MinChunkSeconds = 2;
 

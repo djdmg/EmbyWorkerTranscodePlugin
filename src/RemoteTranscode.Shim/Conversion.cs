@@ -187,6 +187,7 @@ public sealed class ConversionSession : IDisposable
                         ? $"vérification impossible : fin de la vidéo illisible ({(sourceVideo.IsKnown ? "résultat" : "source")})"
                         : SourceInfo.VerifyVideoSpan(sourceVideo, resultVideo)
                             ?? SourceInfo.VerifyVideoStart(sourceVideo, await FileStartAsync(plan.Input), resultVideo);
+                    problem ??= await AudioStartProblemAsync(plan);
                 }
             }
             catch (Exception ex)
@@ -195,6 +196,32 @@ public sealed class ConversionSession : IDisposable
             }
         }
         return (code, problem, false, quitRequested || run.QuitReceived);
+    }
+
+    /// <summary>
+    /// The audio streams start where they do in the source (SourceInfo.VerifyAudioStarts), for both assemblies. A measure that
+    /// cannot be made says nothing about the file: unlike the video's end, it never rejects it.
+    /// </summary>
+    private async Task<string?> AudioStartProblemAsync(ConversionPlan plan)
+    {
+        if (EmbyConversionPlanner.WhyAudioStartIsNotCompared(plan.AssemblyTemplate) is { } why)
+        {
+            err.Line($"remote-transcode: début de l'audio non vérifié ({why})");
+            return null;
+        }
+        if (EmbyConversionPlanner.AssemblySourceMaps(plan.AssemblyTemplate) is not { } maps)
+            return null;
+        try
+        {
+            var source = StreamStarts.Parse(await RunProbeAsync(StreamStarts.ProbeArgs(plan.Input)));
+            var result = StreamStarts.Parse(await RunProbeAsync(StreamStarts.ProbeArgs(plan.Output)));
+            return SourceInfo.VerifyAudioStarts(source, maps, result);
+        }
+        catch (Exception ex)
+        {
+            err.Line($"remote-transcode: début de l'audio non vérifié ({ex.GetType().Name})");
+            return null;
+        }
     }
 
     /// <summary>The file's start as Emby's ffprobe reads it; null when it gives none.</summary>

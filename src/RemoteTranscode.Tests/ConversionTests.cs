@@ -271,6 +271,137 @@ public class ConversionTests
         Assert.Null(SourceInfo.VerifyVideoStart(new VideoSpan(0.5, 100, 0.04), null, new VideoSpan(0, 100, 0.04)));
     }
 
+    private static StreamStarts Source(double? fileStart, double? audioStart) =>
+        new(fileStart, [new(0, "video", "h264", 0, 0.079), new(1, "audio", "ac3", 48000, audioStart)]);
+
+    private static StreamStarts Result(double? audioStart, string codec = "aac", int rate = 48000) =>
+        new(0, [new(0, "video", "h264", 0, 0.079), new(1, "audio", codec, rate, audioStart)]);
+
+    [Theory]
+    [InlineData(0.0, 0.0, 0.0, true)]              // AAC in MP4: first packet at -1024 samples, the edit list hides it
+    [InlineData(0.0, 0.0, 0.014, true)]
+    [InlineData(0.0, 0.0, 0.016, false)]
+    [InlineData(0.0, 0.0, -0.016, false)]
+    [InlineData(0.021, 0.021, 0.0, true)]          // the whole file starts late: everything moves together
+    [InlineData(0.021, 0.0, 0.021, true)]          // audio after the file's start stays so
+    [InlineData(0.021, 0.0, 0.0, true)]            // ...within the priming: a stream starting later reads its first packet
+    [InlineData(0.5, 0.0, 0.478667, true)]         // measured: AAC at 48 kHz, sound at 0.5 s
+    [InlineData(0.5, 0.0, 0.5, true)]
+    [InlineData(0.5, 0.0, 0.46, false)]            // more than the priming and the tolerance
+    [InlineData(0.5, 0.0, 0.516, false)]
+    [InlineData(0.5, 0.0, 0.0, false)]             // moved to 0
+    public void Audio_start_check_sees_an_audio_out_of_step(double sourceStart, double fileStart, double resultStart, bool passes) =>
+        Assert.Equal(passes, SourceInfo.VerifyAudioStarts(Source(fileStart, sourceStart), [1], Result(resultStart)) is null);
+
+    [Fact]
+    public void Audio_start_check_allows_the_priming_of_the_results_codec_only()
+    {
+        // 1105 samples of MP3 at 48 kHz, measured: 0.476979 for 0.5 s.
+        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1], Result(0.476979, "mp3")));
+        // AAC at 44.1 kHz: 23.2 ms.
+        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1], Result(0.4768, "aac", 44100)));
+        // A copied AC-3 has no priming allowed: 25 ms early is a move; 5 ms (its first packet, measured) is not.
+        Assert.NotNull(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1], Result(0.475, "ac3")));
+        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1], Result(0.495, "ac3")));
+    }
+
+    [Fact]
+    public void Audio_start_check_goes_through_the_maps()
+    {
+        var source = new StreamStarts(0, [
+            new(0, "video", "h264", 0, 0), new(1, "audio", "ac3", 48000, 0), new(2, "subtitle", "subrip", 0, 1), new(3, "audio", "ac3", 48000, 0.5)]);
+        var inOrder = new StreamStarts(0, [new(0, "video", "h264", 0, 0), new(1, "audio", "aac", 48000, 0.5), new(2, "audio", "aac", 48000, 0), new(3, "subtitle", "mov_text", 0, 1)]);
+        // Emby asks for the second track first; the subtitle's map counts for nothing.
+        Assert.Null(SourceInfo.VerifyAudioStarts(source, [3, 2, 1], inOrder));
+        string? problem = SourceInfo.VerifyAudioStarts(source, [1, 3], inOrder);
+        Assert.Contains("audio 1", problem);
+    }
+
+    [Fact]
+    public void Audio_start_check_is_skipped_without_values()
+    {
+        Assert.Null(SourceInfo.VerifyAudioStarts(Source(null, 0.5), [1], Result(0)));
+        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, null), [1], Result(0)));
+        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1], Result(null)));
+        // Streams that do not correspond: another check's business.
+        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [1, 1], Result(0)));
+        Assert.Null(SourceInfo.VerifyAudioStarts(Source(0, 0.5), [], Result(0)));
+    }
+
+    [Fact]
+    public void Stream_starts_are_read_from_ffprobe_and_what_it_lacks_stays_unknown()
+    {
+        var starts = StreamStarts.Parse("""
+            {"streams":[{"index":0,"codec_name":"h264","codec_type":"video","start_time":"0.079000"},
+                        {"index":1,"codec_name":"aac","codec_type":"audio","sample_rate":"48000","start_time":"0.000000"},
+                        {"index":2,"codec_name":"ac3","codec_type":"audio","sample_rate":"44100","start_time":"N/A"},
+                        {"index":3,"codec_type":"audio"}],
+             "format":{"start_time":"0.021000"}}
+            """);
+        Assert.Equal(0.021, starts.FileStart);
+        Assert.Equal(0.079, starts.Streams[0].Start);
+        Assert.Equal(1024.0 / 48000, starts.Streams[1].Priming);
+        Assert.Null(starts.Streams[2].Start);
+        Assert.Null(starts.Streams[3].Start);
+        Assert.Null(StreamStarts.Parse("""{"format":{}}""").FileStart);
+    }
+
+    private static readonly string[] AudioAssembly =
+        ["-y", "-copyts", "-start_at_zero", "-f", "matroska,webm", "-c:v:0", "h264", "-i", "/m/a.mkv", "-f", "concat", "-safe", "0", "-i", "{chunklist}",
+         "-map", "1:v:0", "-map", "0:1", "-map", "0:3", "-sn", "-c:v:0", "copy", "-c:a:0", "aac", "-af", "volume=2", "-avoid_negative_ts", "disabled", "-f", "mp4", "/o/a.mp4"];
+
+    [Fact]
+    public void Audio_maps_of_an_assembly_leave_the_chunks_out()
+    {
+        Assert.Equal([1, 3], EmbyConversionPlanner.AssemblySourceMaps(AudioAssembly));
+        Assert.Null(EmbyConversionPlanner.AssemblySourceMaps(["-map", "1:v:0", "-map", "0:a:0", "/o/a.mp4"]));
+    }
+
+    [Fact]
+    public void Audio_start_is_compared_on_a_usual_assembly_and_on_embys_shape_of_command()
+    {
+        Assert.Null(EmbyConversionPlanner.WhyAudioStartIsNotCompared(AudioAssembly));
+        var plan = EmbyConversionPlanner.Plan(EmbyConversion, Roots);
+        Assert.Null(EmbyConversionPlanner.WhyAudioStartIsNotCompared(plan.AssemblyTemplate));
+        Assert.Equal([1, 2], EmbyConversionPlanner.AssemblySourceMaps(plan.AssemblyTemplate));
+    }
+
+    [Theory]
+    [InlineData("-async", "1")]
+    [InlineData("-ss", "10")]
+    [InlineData("-itsoffset", "0.5")]
+    [InlineData("-output_ts_offset", "1")]
+    [InlineData("-af", "aresample=async=1:first_pts=0")]
+    [InlineData("-filter:a:0", "adelay=500")]
+    [InlineData("-avoid_negative_ts", "make_zero")]
+    public void Audio_start_is_not_compared_when_emby_asks_to_move_the_audio(string option, string value)
+    {
+        var assembly = AudioAssembly.ToList();
+        assembly.InsertRange(assembly.Count - 1, [option, value]);
+        Assert.NotNull(EmbyConversionPlanner.WhyAudioStartIsNotCompared(assembly));
+    }
+
+    [Fact]
+    public void Audio_start_is_compared_with_shortest_which_only_cuts_the_end()
+    {
+        var assembly = AudioAssembly.ToList();
+        assembly.Insert(assembly.Count - 1, "-shortest");
+        Assert.Null(EmbyConversionPlanner.WhyAudioStartIsNotCompared(assembly));
+    }
+
+    [Theory]
+    [InlineData("matroska,webm", "mpegts")]     // an MPEG-TS result starts at 1.4 s
+    [InlineData("matroska,webm", "avi")]
+    [InlineData("mpegts", "mp4")]               // a stream's first packets may not decode
+    [InlineData("avi", "mp4")]                  // approximate times
+    public void Audio_start_is_not_compared_on_containers_not_measured(string input, string output)
+    {
+        var assembly = AudioAssembly.ToArray();
+        assembly[4] = input;
+        assembly[^2] = output;
+        Assert.NotNull(EmbyConversionPlanner.WhyAudioStartIsNotCompared(assembly));
+    }
+
     [Fact]
     public void Video_span_check_counts_frames()
     {
