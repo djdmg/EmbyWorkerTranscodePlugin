@@ -299,6 +299,17 @@ public class SyncCheckTests
     }
 
     [Fact]
+    public void An_encoded_audio_drifting_slowly_passes_but_a_jump_does_not()
+    {
+        // As ffmpeg following an AVI's clock: packets a sample short, the grid moves by less than a millisecond between windows.
+        double[] Drifting(double jumpAt, double jump) => Grid(-AacPriming, AacPacket, Duration).Select(t => t - (t + AacPriming) * 0.000005 + (t >= jumpAt ? jump : 0)).ToArray();
+        var every30 = Grid(30, 30, Duration - 30).ToArray();
+        var video = Video(Grid(0, Frame25, Duration));
+        Assert.Null(SyncCheck.Verify(Source(), 0, File(0, video, Audio(1, "aac", Drifting(1e9, 0), AacPacket, 0, end: Duration)), Encoded, every30));
+        Assert.Contains("audio 1 décalé", SyncCheck.Verify(Source(), 0, File(0, video, Audio(1, "aac", Drifting(150, 0.006), AacPacket, 0, end: Duration)), Encoded, every30));
+    }
+
+    [Fact]
     public void An_aac_may_end_a_packet_late_but_not_two()
     {
         var video = Video(Grid(0, Frame25, Duration));

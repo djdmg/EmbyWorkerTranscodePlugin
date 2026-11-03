@@ -8,6 +8,14 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.38 — 2026-11-03
+
+Built and published by GitHub Actions (release v0.7.38). Worker unchanged (0.7.20).
+
+### Fixed
+
+- **Plugin** — A real AVI with MP3 was rejected for its AAC being 3.3 ms off its grid at 1079 s, as it is in Emby's own conversion: ffmpeg follows the source's clock with packets a sample short. The check now looks for a jump of more than 3 ms between windows; a slow drift away from the source shows at the sound's places and at the stream's end.
+
 ## Plugin 0.7.37 — 2026-11-03
 
 Built and published by GitHub Actions (release v0.7.37). Worker unchanged (0.7.20).

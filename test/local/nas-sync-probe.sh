@@ -199,6 +199,7 @@ for i, (s, r) in enumerate(zip(audio_s, audio_r)):
     ts, tr = [p[0] for p in from_s], [p[0] for p in to]
     ss, sr_step = step(ts, int(num(s.get("sample_rate")) or 0)), step(tr, sr)
     margin = max(ss, sr_step)
+    drift = 0
     for w in windows:
         a = [t for t in ts if w <= t <= w + WINDOW]
         b = [t for t in tr if w <= t <= w + WINDOW]
@@ -210,7 +211,11 @@ for i, (s, r) in enumerate(zip(audio_s, audio_r)):
             continue
         gone = max([abs(nearest(tr, t)) for t in a] + [abs(nearest(ts, t)) for t in b])
         source_on = all(abs(rem(t - ts[0], ss)) <= TOLERANCE for t in a)
-        off = max([abs(rem(t - tr[0], sr_step)) for t in b] or [0])
+        off = 0
+        for t in b:
+            o = rem(t - tr[0] - drift, sr_step)
+            off = max(off, abs(o))
+            drift += o
         judge(gone <= 2 * margin + TOLERANCE and (off <= TOLERANCE or not source_on),
               "audio %d window %.3f: nearest sound %s (limit %s), result off its grid by %s, source on its own: %s" % (i + 1, w, ms(gone), ms(2 * margin + TOLERANCE), ms(off), source_on))
     end_s, end_r = from_s[-1][0] + from_s[-1][1], to[-1][0] + to[-1][1]

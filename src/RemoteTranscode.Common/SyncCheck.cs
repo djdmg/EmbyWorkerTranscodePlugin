@@ -501,6 +501,7 @@ public static class SyncCheck
         var starts = from.Select(p => p.Time).ToList();
         var results = to.Select(p => p.Time).ToList();
         double margin = Math.Max(sourceStep, resultStep);
+        double gridDrift = 0;
         foreach (double w in windows)
         {
             var inSource = starts.Where(t => t >= w && t <= w + WindowSeconds).ToList();
@@ -523,12 +524,17 @@ public static class SyncCheck
                 return Reason($"{name} décalé à {missing:0.000}s : son dans la source, pas dans le résultat");
             if (FirstUnmatched(inResult, starts, 2 * margin + Tolerance) is { } extra)
                 return Reason($"{name} décalé à {extra:0.000}s : son dans le résultat, pas dans la source");
-            // On the grid its first packet set. A hole in the source may move the grid (then the source's own grid moved too, and
-            // nothing can be said of a fraction of a packet here); otherwise, a move means a shift.
+            // On the grid its first packet set, or where the previous window left it: ffmpeg follows the source's clock with packets a sample short, so a
+            // grid may drift slowly (AVI with MP3: 3713 packets at most 0.023 ms short, -3.3 ms at 1079 s, the same in Emby's own conversion). A shift is
+            // a jump between windows. A hole in the source may move the grid too (then its own grid moved, and nothing can be said of a fraction of a
+            // packet here); otherwise, a jump means a shift. A drift away from the source shows at the sound's places and at the end.
             if (inSource.All(t => Math.Abs(Remainder(t - from[0].Time, sourceStep)) <= Tolerance))
                 foreach (double t in inResult)
-                    if (Remainder(t - to[0].Time, resultStep) is var off && Math.Abs(off) > Tolerance)
-                        return Reason($"{name} décalé à {t:0.000}s : {off * 1000:+0.0;-0.0} ms par rapport à ses premiers paquets");
+                {
+                    if (Remainder(t - to[0].Time - gridDrift, resultStep) is var off && Math.Abs(off) > Tolerance)
+                        return Reason($"{name} décalé à {t:0.000}s : {off * 1000:+0.0;-0.0} ms par rapport aux paquets d'avant");
+                    gridDrift += off;
+                }
         }
         // An encoder gives back every sample and its last packet says so (0 to 0.2 ms measured): this is what shows a shift by whole packets
         // lasting to the end, which leaves the grid alone. MP3 pads its last packet (17 ms measured), so only a stream ending early is seen

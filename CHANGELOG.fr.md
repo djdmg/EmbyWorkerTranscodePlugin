@@ -6,6 +6,14 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.38 — 03/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.38). Worker inchangé (0.7.20).
+
+### Corrigé
+
+- **Plugin** — Un vrai AVI avec MP3 était rejeté parce que son AAC s'écartait de 3,3 ms de sa grille à 1079 s, comme dans la conversion d'Emby seul : ffmpeg suit l'horloge de la source avec des paquets plus courts d'un échantillon. Le contrôle cherche maintenant un saut de plus de 3 ms entre deux fenêtres ; une dérive lente par rapport à la source se voit aux emplacements du son et à la fin de la piste.
+
 ## Plugin 0.7.37 — 03/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.37). Worker inchangé (0.7.20).
