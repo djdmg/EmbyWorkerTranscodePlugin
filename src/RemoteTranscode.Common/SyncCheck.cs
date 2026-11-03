@@ -544,7 +544,9 @@ public static class SyncCheck
         // to the end is therefore not seen on those encoders; the audio is one encode, with no known cause for it.
         double sourceEnd = from[^1].Time + (from[^1].Length > 0 ? from[^1].Length : sourceStep), resultEnd = to[^1].Time + (to[^1].Length > 0 ? to[^1].Length : resultStep);
         double late = copied || PadsLastPacket(encoder) ? margin + Tolerance : 2 * Tolerance;
-        double early = copied ? margin + Tolerance : 2 * Tolerance;
+        // An MP3 source pads its own last packet the same way, and its packet's end says more than the sound holds (150.022 s in a real assembly's source, for an AAC
+        // complete at 150.000 s, MP3 in MP4, both assemblies): up to a source packet early. A whole AAC packet lost is not seen at the end of such a source.
+        double early = copied ? margin + Tolerance : source.Codec == "mp3" ? sourceStep + Tolerance : 2 * Tolerance;
         if (resultEnd - sourceEnd > late || sourceEnd - resultEnd > early)
             return Reason($"{name} finissant à {resultEnd:0.000}s au lieu de {sourceEnd:0.000}s");
         return null;

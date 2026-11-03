@@ -318,6 +318,21 @@ public class SyncCheckTests
     }
 
     [Fact]
+    public void A_source_in_mp3_may_read_a_packet_past_the_end_of_its_aac_but_not_two()
+    {
+        const double mp3Packet = 1152.0 / 44100;
+        // The source's last packet ends 22 ms past the sound, measured on MP3 in MP4.
+        var source = File(0, Video(Grid(0, Frame25, Duration)), Audio(1, "mp3", Grid(0, mp3Packet, Duration + 0.022), mp3Packet, 0, 44100, Duration + 0.022));
+        var video = Video(Grid(0, Frame25, Duration));
+        Assert.Null(SyncCheck.Verify(source, 0, File(0, video, Audio(1, "aac", Grid(-AacPriming, AacPacket, Duration), AacPacket, 0)), Encoded, [310]));
+        var twoShort = Duration - 2 * AacPacket;
+        Assert.Contains("finissant", SyncCheck.Verify(source, 0, File(0, video, Audio(1, "aac", Grid(-AacPriming, AacPacket, twoShort), AacPacket, 0, end: twoShort)), Encoded, [310]));
+        // No such allowance from any other source: 22 ms early on AC-3 stays a rejection.
+        var ac3 = File(0, Video(Grid(0, Frame25, Duration)), Audio(1, "ac3", Grid(0, Ac3Packet, Duration + 0.022), Ac3Packet, 0, 48000, Duration + 0.022));
+        Assert.Contains("finissant", SyncCheck.Verify(ac3, 0, File(0, video, Audio(1, "aac", Grid(-AacPriming, AacPacket, Duration), AacPacket, 0)), Encoded, [310]));
+    }
+
+    [Fact]
     public void An_encoder_padding_its_last_packet_may_end_later_but_not_earlier()
     {
         var video = Video(Grid(0, Frame25, Duration));

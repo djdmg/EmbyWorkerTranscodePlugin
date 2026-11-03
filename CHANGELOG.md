@@ -8,6 +8,14 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.39 — 2026-11-03
+
+Built and published by GitHub Actions (release v0.7.39). Worker unchanged (0.7.20).
+
+### Fixed
+
+- **Plugin** — A correct conversion of a source with MP3 sound could be rejected and redone by Emby: the source's last MP3 packet ended 22 ms past the sound (150.022 s for an AAC complete at 150.000 s, MP3 in MP4, classic and audio ahead). An encoded stream may now end up to one source packet + 3 ms before an MP3 source's last packet. Known limit: one whole AAC packet lost (about 23 ms) is no longer seen at the end of such a source. Other sources stay at 6 ms.
+
 ## Plugin 0.7.38 — 2026-11-03
 
 Built and published by GitHub Actions (release v0.7.38). Worker unchanged (0.7.20).

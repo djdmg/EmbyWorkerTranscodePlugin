@@ -6,6 +6,14 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.39 — 03/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.39). Worker inchangé (0.7.20).
+
+### Corrigé
+
+- **Plugin** — Une conversion correcte d'une source au son MP3 pouvait être rejetée et refaite par Emby : le dernier paquet MP3 de la source finissait 22 ms après le son (150,022 s pour un AAC complet à 150,000 s, MP3 dans MP4, en classique et à l'avance). Une piste encodée peut désormais finir jusqu'à un paquet source + 3 ms avant le dernier paquet d'une source MP3. Limite connue : un paquet AAC entier perdu (environ 23 ms) ne se voit plus à la fin d'une telle source. Les autres sources restent à 6 ms.
+
 ## Plugin 0.7.38 — 03/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.38). Worker inchangé (0.7.20).
