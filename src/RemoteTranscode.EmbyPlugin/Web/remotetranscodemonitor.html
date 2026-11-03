@@ -45,7 +45,7 @@
                 <h2 class="sectionTitle">Réglages</h2>
                 <label class="checkboxContainer"><input is="emby-checkbox" type="checkbox" class="chkAudioAhead" disabled /><span>Audio converti à l'avance</span></label>
                 <p class="rtm-audio-state rtm-muted">…</p>
-                <p class="rtm-muted">Pendant que les workers encodent la vidéo, le serveur convertit aussi l'audio (une conversion à la fois), avec les options d'Emby : l'assemblage n'a plus qu'à recopier les flux, au lieu de relire toute la source pour convertir l'audio. Utilisé seulement pour les commandes où le fichier obtenu est le même ; sinon, ou si cet audio n'est pas prêt ou est rejeté par le contrôle, l'assemblage convertit l'audio comme d'habitude. Expérimental et désactivé par défaut, le temps de valider la synchronisation audio/vidéo. S'applique sans redémarrage aux conversions capturées ensuite ; celles déjà en cours ne changent pas.</p>
+                <p class="rtm-muted">Pendant que les workers encodent la vidéo, le serveur convertit aussi l'audio (une conversion à la fois), avec les options d'Emby : l'assemblage n'a plus qu'à recopier les flux, au lieu de relire toute la source pour convertir l'audio. Utilisé seulement pour les commandes où le fichier obtenu est le même ; sinon, ou si cet audio n'est pas prêt ou est rejeté par le contrôle, l'assemblage convertit l'audio comme d'habitude. Activé par défaut ; un serveur qui a déjà enregistré ce réglage garde sa valeur. S'applique sans redémarrage aux conversions capturées ensuite ; celles déjà en cours ne changent pas.</p>
             </div>
         </div>
     </div>

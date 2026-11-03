@@ -63,7 +63,7 @@ Garde-fous : auto-test du relais au démarrage d'Emby, coupe-circuit (fichier `d
 
 ### Suivi et diagnostic
 
-- **Page de suivi** « Suivi du transcodage » dans le tableau de bord d'Emby (administrateurs) : workers, conversions en cours, historique avec la raison de chaque échec (les 100 plus récentes, gardées 7 jours), longueur de la file d'Emby, rafraîchie toutes les 5 s tant qu'elle est affichée. Elle porte aussi la case de l'audio converti à l'avance (`EncodeAudioAhead`, désactivé par défaut), pour les conversions capturées ensuite.
+- **Page de suivi** « Suivi du transcodage » dans le tableau de bord d'Emby (administrateurs) : workers, conversions en cours, historique avec la raison de chaque échec (les 100 plus récentes, gardées 7 jours) et, quand une conversion a été rendue à Emby, le résultat du contrôle de son fichier, livré dans tous les cas, longueur de la file d'Emby, rafraîchie toutes les 5 s tant qu'elle est affichée. Elle porte aussi la case de l'audio converti à l'avance (`EncodeAudioAhead`, activé par défaut ; un serveur qui a déjà enregistré ses réglages garde sa valeur), pour les conversions capturées ensuite.
 - **Diagnostic de la bibliothèque** (administrateurs) : une tâche planifiée qui ne se lance qu'à la main, et sa page, listent les vidéos à risque pour une conversion par tranches. Un fichier à la fois, priorité minimale, en pause pendant les lectures et les conversions, reprise possible ; environ 40 s lues par fichier (début, cinq passages, fin), donc un fichier absent de la liste peut quand même avoir un défaut ailleurs. Les fichiers ne sont jamais modifiés.
 
 ### Signalement automatique des échecs

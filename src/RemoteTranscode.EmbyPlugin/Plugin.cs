@@ -128,8 +128,8 @@ public sealed class PluginConfiguration : BasePluginConfiguration
     public bool ReportFailures { get; set; } = true;
 
     /// <summary>
-    /// Converts a conversion's audio ahead on the server (CoordinatorOptions.EncodeAudioAhead). Off until validated on
-    /// a real server; switched on the monitoring page, through POST /RemoteTranscode/AudioAhead.
+    /// Converts a conversion's audio ahead on the server (CoordinatorOptions.EncodeAudioAhead); switched on the
+    /// monitoring page, through POST /RemoteTranscode/AudioAhead. A server that saved its settings before this default keeps the value it saved.
     /// </summary>
-    public bool EncodeAudioAhead { get; set; } = false;
+    public bool EncodeAudioAhead { get; set; } = true;
 }

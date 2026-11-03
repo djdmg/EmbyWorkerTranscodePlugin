@@ -6,6 +6,18 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.40 — 03/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.40). Worker inchangé (0.7.20).
+
+### Ajouté
+
+- **Plugin** — Une conversion rendue à Emby parce que les workers n'ont pas pu la finir est désormais contrôlée aussi, pour information : l'historique de la page de suivi indique si le fichier d'Emby passe le contrôle de synchro, et ce qui a été trouvé sinon. Le fichier est livré dans tous les cas et le code de sortie reste celui d'Emby ; le contrôle est limité à 3 minutes. Raison mesurée : un vrai fichier HDR est sorti du ffmpeg d'Emby avec une image de retard (image dupliquée, 42 ms) alors que la conversion des workers était synchronisée. Non couvert : les conversions refusées d'emblée, que le plugin n'a jamais prises en charge.
+
+### Modifié
+
+- **Plugin** — `EncodeAudioAhead` est désormais activé par défaut, après les mesures sur de vrais fichiers et le banc T28. Un serveur qui a déjà enregistré ses réglages garde sa valeur.
+
 ## Plugin 0.7.39 — 03/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.39). Worker inchangé (0.7.20).

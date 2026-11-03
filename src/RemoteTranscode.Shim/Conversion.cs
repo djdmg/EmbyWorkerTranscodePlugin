@@ -24,6 +24,8 @@ public sealed class ConversionSession : IDisposable
     private volatile bool quitRequested;
     // Long enough for the windows of a large file on a slow disk: past it, the file is rejected, as for any measure that fails.
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(600);
+    // Emby's file is finished and only waits for this process to exit: the check for information may not hold it for long.
+    private static readonly TimeSpan EmbyCheckLimit = TimeSpan.FromSeconds(180);
 
     private ConversionSession(ShimConfig config, StderrWriter err, ClientWebSocket socket, string[] args, string taskId)
     {
@@ -89,12 +91,12 @@ public sealed class ConversionSession : IDisposable
                     if (quitRequested)
                         return 0;
                     err.Line($"remote-transcode: {failed.Reason} ; conversion sur le serveur");
-                    return await LocalFfmpeg.RunAsync(config, args, StdinReader.Shared);
+                    return await RunEmbyCommandAsync();
                 case null:
                     if (quitRequested)
                         return 0;
                     err.Line("remote-transcode: conversion sur le serveur");
-                    return await LocalFfmpeg.RunAsync(config, args, StdinReader.Shared);
+                    return await RunEmbyCommandAsync();
             }
         }
     }
@@ -146,7 +148,7 @@ public sealed class ConversionSession : IDisposable
         // Never hand Emby a doubtful file: remove it and convert the original way.
         err.Line($"remote-transcode: résultat rejeté ({problem}), conversion sur le serveur");
         try { File.Delete(plan.Output); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        return await LocalFfmpeg.RunAsync(config, args, StdinReader.Shared);
+        return await RunEmbyCommandAsync();
 
         // A 'q' during the check of a file that failed it: nothing to convert any more, and no doubtful file left behind.
         int RemoveRejected()
@@ -154,6 +156,51 @@ public sealed class ConversionSession : IDisposable
             try { File.Delete(plan.Output); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Emby's own command, for a conversion the workers could not finish. Its file is checked like an assembly's, but only to say so on the
+    /// monitoring page: nothing is left to redo it, so it is delivered and the exit code stays Emby's. A real file came out one frame late
+    /// this way (a duplicated frame, 42 ms) where the workers' conversion of it was in step.
+    /// </summary>
+    private async Task<int> RunEmbyCommandAsync()
+    {
+        using var run = LocalFfmpeg.Start(config, args, StdinReader.Shared, 0, null);
+        int code = await run.Completion;
+        if (code == 0 && !run.QuitReceived && !quitRequested)
+            await ReportEmbyResultAsync();
+        return code;
+    }
+
+    private async Task ReportEmbyResultAsync()
+    {
+        string? problem, check = null;
+        try
+        {
+            var plan = EmbyConversionPlanner.Plan(args, ["/"]);
+            if (SyncExpectation.From(plan.AssemblyTemplate, plan.ChunkTemplate) is not { } expected)
+                problem = "vérification impossible : pistes de la commande inconnues";
+            else
+            {
+                var work = SyncCheck.RunAsync(RunProbeOrThrowAsync, plan.Input, plan.Output, expected, []);
+                if (await Task.WhenAny(work, Task.Delay(EmbyCheckLimit)) != work)
+                    problem = $"contrôle non terminé après {EmbyCheckLimit.TotalSeconds:0} s";
+                else
+                {
+                    var verdict = await work;
+                    problem = verdict.Problem;
+                    check = $"vidéo source {verdict.Source}, résultat {verdict.Result} ; {verdict.Summary}";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            problem = $"vérification impossible : {ex.Message}";
+        }
+        err.Line($"remote-transcode: fichier fait par Emby, contrôle pour information : {problem ?? "conforme"}{(check is null ? "" : " (" + check + ")")}");
+        using var again = await ShimSocket.ConnectAsync(config, err);
+        if (again is null || !await TrySendAndClose(again, new EmbyResultChecked(taskId, problem, check)))
+            err.Line("remote-transcode: contrôle du fichier fait par Emby non transmis au coordinateur");
     }
 
     /// <summary>

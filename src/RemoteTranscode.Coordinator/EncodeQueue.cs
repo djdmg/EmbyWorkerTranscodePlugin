@@ -162,6 +162,10 @@ public sealed class EncodeTask
     public string? Note { get; set; }
     /// <summary>The shim's check line of the last assembly (source and result video spans), for the status page and the history.</summary>
     public string? Check { get; set; }
+    /// <summary>The check line of the file Emby's own ffmpeg made after the workers could not finish; null when none was checked.</summary>
+    public string? EmbyResult { get; set; }
+    /// <summary>What that check found wrong with Emby's file, which was delivered all the same.</summary>
+    public string? EmbyResultProblem { get; set; }
     public SourceInfo? Source { get; set; }
     public List<EncodeSlice> Slices { get; set; } = [];
     /// <summary>Mutated under the queue's lock only; enumerate it under that lock too.</summary>
@@ -852,6 +856,21 @@ public sealed partial class EncodeQueue : IJobOwner
         // "q reçu": Emby cancelled during the assembly, nothing failed.
         if (!done.Success && done.Error != "q reçu")
             ReportFailure(task, FailureKind.AssemblyRejected, done.Error ?? "assemblage rejeté", check: done.Check);
+    }
+
+    /// <summary>The check of the file Emby's own ffmpeg made once this conversion was handed back to it: for the page, the task's outcome stays.</summary>
+    public void OnEmbyResultChecked(EmbyResultChecked result)
+    {
+        lock (gate)
+        {
+            if (tasks.FirstOrDefault(t => t.Id == result.TaskId) is not { } task)
+                return;
+            task.EmbyResult = result.Check ?? "non mesuré";
+            task.EmbyResultProblem = result.Problem;
+            Save();
+            if (result.Problem != null)
+                logger.LogWarning("Conversion {Id}: the file made by Emby is out of step with its source: {Problem}", task.Id, result.Problem);
+        }
     }
 
     // ---- Scheduling ---------------------------------------------------------------------------------

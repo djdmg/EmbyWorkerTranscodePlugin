@@ -86,7 +86,7 @@ function evilStatus() {
                 runs: [{ worker: Evil, slice: 4, speed: 1.5 }], audio: Evil, note: Evil + EvilAttr, createdAt: '2026-01-01T10:00:00Z', updatedAt: '2026-01-01T10:10:00Z',
             },
             {
-                status: 'Failed', input: 'C:\\media\\' + Evil + '.mkv', worker: Evil + ', second machine', error: Evil, note: EvilAttr, check: Evil, audio: Evil,
+                status: 'Failed', input: 'C:\\media\\' + Evil + '.mkv', worker: Evil + ', second machine', error: Evil, note: EvilAttr, check: Evil, audio: Evil, embyResult: Evil, embyResultProblem: Evil,
                 createdAt: '2026-01-01T08:00:00Z', updatedAt: '2026-01-01T09:05:30Z',
             },
             { status: 'Completed', input: '/media/sample-movie.mkv', worker: 'machine-a', percent: 100, createdAt: '2026-01-01T07:00:00Z', updatedAt: '2026-01-01T07:12:30Z' },
@@ -174,7 +174,7 @@ test('conversions in progress: title, percent, speed, ETA, machines, slices, aud
 
 test('history: status, duration, machines, note, reason; a cancelled assembly is not a failure', () => {
     const html = render.renderHistory(evilStatus());
-    for (const expected of ['terminé', '12 min 30 s', 'machine-a', 'sample-movie.mkv', '1 h 05 min', 'échec', 'Contrôle : ', '45 s', 'Annulée par Emby'])
+    for (const expected of ['terminé', '12 min 30 s', 'machine-a', 'sample-movie.mkv', '1 h 05 min', 'échec', 'Contrôle : ', 'livré tel quel, écart au contrôle', '45 s', 'Annulée par Emby'])
         assert.ok(html.includes(expected), expected);
     assert.ok(!html.includes('q reçu'));
     assert.ok(!html.includes('42.5'), 'conversions in progress are not in the history');

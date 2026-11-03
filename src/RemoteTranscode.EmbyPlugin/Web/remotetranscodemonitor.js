@@ -185,7 +185,10 @@ define(['baseView', 'emby-checkbox', 'emby-scroller'], function (BaseView) {
                 '<td>' + badge(EncodeLabels, cancelled ? 'Cancelled' : e.status) + '</td>' +
                 '<td>' + esc(duration(e.createdAt, e.updatedAt) || '—') + '</td>' +
                 '<td>' + esc(e.worker || '—') + '</td>' +
-                '<td>' + reason + (e.check ? muted('Contrôle : ' + e.check) : '') + (e.audio ? muted('Audio : ' + e.audio) : '') + '</td></tr>';
+                '<td>' + reason + (e.check ? muted('Contrôle : ' + e.check) : '') +
+                (e.embyResultProblem ? '<div class="rtm-error">' + esc('Fichier fait par Emby, livré tel quel, écart au contrôle : ' + e.embyResultProblem) + '</div>'
+                    : e.embyResult ? muted('Fichier fait par Emby, conforme au contrôle : ' + e.embyResult) : '') +
+                (e.audio ? muted('Audio : ' + e.audio) : '') + '</td></tr>';
         });
         return rows.length
             ? table(['Fichier', 'État', 'Durée', 'Machines', 'Note et raison'], rows)

@@ -44,6 +44,8 @@ public static class EncodeCli
         t.Note,
         t.Error,
         t.Check,
+        t.EmbyResult,
+        t.EmbyResultProblem,
         t.CreatedAt,
         t.UpdatedAt,
     };

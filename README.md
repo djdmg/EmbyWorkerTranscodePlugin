@@ -65,7 +65,7 @@ Safeguards: relay self-test at Emby startup, kill switch (`disabled` file), allo
 
 ### Monitoring and diagnostic
 
-- **Monitoring page** « Suivi du transcodage » in Emby's dashboard (in French, administrators): workers, conversions in progress, history with the reason of each failure (the 100 most recent, kept 7 days), Emby's queue length, refreshed every 5 s while shown. It also holds the switch of the audio converted ahead (`EncodeAudioAhead`, off by default), for the conversions captured from then on.
+- **Monitoring page** « Suivi du transcodage » in Emby's dashboard (in French, administrators): workers, conversions in progress, history with the reason of each failure (the 100 most recent, kept 7 days) and, when a conversion was handed back to Emby, the check of its file, delivered either way, Emby's queue length, refreshed every 5 s while shown. It also holds the switch of the audio converted ahead (`EncodeAudioAhead`, on by default; a server that already saved its settings keeps its value), for the conversions captured from then on.
 - **Library diagnostic** « Diagnostic de la bibliothèque » (in French, administrators): a scheduled task that only runs when started by hand, and its page, list the video files at risk for a slice-based conversion. One file at a time, lowest priority, paused during playbacks and conversions, resumable; about 40 s read per file (start, five passages, end), so a file not listed may still hold a defect elsewhere. Files are never modified.
 
 ### Automatic failure reports

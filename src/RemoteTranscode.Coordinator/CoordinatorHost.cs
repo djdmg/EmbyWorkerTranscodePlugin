@@ -226,6 +226,9 @@ public static class CoordinatorHost
                         case ConversionDone done:
                             encodes.OnConversionDone(done);
                             break;
+                        case EmbyResultChecked checkedResult:
+                            encodes.OnEmbyResultChecked(checkedResult);
+                            break;
                         case ShimStartQuery startQuery:
                             await shim.SendAsync(await dispatcher.StartAdviceAsync(startQuery));
                             break;

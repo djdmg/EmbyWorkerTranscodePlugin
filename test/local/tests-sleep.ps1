@@ -223,7 +223,7 @@ function Restart-BenchCoordinator([hashtable]$overrides, [string]$saveAs) {
 }
 
 function T16 {
-    # L'audio converti à l'avance est désactivé par défaut (EncodeAudioAhead) : activé pour ce test seulement.
+    # Le banc garde l'audio converti à l'avance désactivé (lib.ps1), bien qu'il soit activé par défaut : activé pour ce test seulement.
     Restart-BenchCoordinator @{ EncodeAudioAhead = $true } 'coordinator-before-t16'
     try { T16Core } finally { Restart-BenchCoordinator @{} 'coordinator-t16' }
 }
@@ -960,9 +960,9 @@ function T30 {
             $verify = Log-Excerpt "shim-$name" 'rejet' 2
             $sa = [double]::Parse("$(& $Paths.ServerFfprobe -v error -select_streams a:0 -show_entries stream=start_time -of csv=p=0 $film)".Trim().Split(',')[0], [cultureinfo]::InvariantCulture)
             $gap = if ($outV) { [math]::Abs(((First-Pts $out 'a:0') + 1024 / 48000 - (First-Pts $out 'v:0')) - ($sa - (First-Pts $film 'v:0'))) * 1000 } else { -1 }
-            $ok = $code -eq 0 -and ($verify -join ' ') -match 'rejet' -and (Prop (Encode-Summary $out) 'Status') -eq 'Failed' -and $outV -and $outV.Frames -eq $srcV.Frames -and $gap -ge 0 -and $gap -le 1
+            $ok = $code -eq 0 -and ($verify -join ' ') -match 'rejet' -and (Prop (Encode-Summary $out) 'Status') -eq 'Failed' -and (Prop (Encode-Summary $out) 'EmbyResult') -and -not (Prop (Encode-Summary $out) 'EmbyResultProblem') -and $outV -and $outV.Frames -eq $srcV.Frames -and $gap -ge 0 -and $gap -le 1
             Add-Result "T30$($variant.Id)" "Assemblage désynchronisé ($($variant.Label)) : rejeté, fichier livré correct" $(if ($ok) { 'PASS' } else { 'FAIL' }) (
-                "source $($srcV.Frames) images | sortie $($outV.Frames) images, écart audio-vidéo {0:0.0} ms | contrôle : « $verify » | final : $(Prop (Encode-Summary $out) 'Status') | code $code" -f $gap)
+                "source $($srcV.Frames) images | sortie $($outV.Frames) images, écart audio-vidéo {0:0.0} ms | contrôle : « $verify » | final : $(Prop (Encode-Summary $out) 'Status') | fichier d'Emby : $(Prop (Encode-Summary $out) 'EmbyResult') / $(Prop (Encode-Summary $out) 'EmbyResultProblem') | code $code" -f $gap)
         }
     } finally { Restart-BenchCoordinator @{} 'coordinator-t30' }
     Ensure-Workers @('w1', 'w2')

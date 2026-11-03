@@ -103,6 +103,44 @@ public class MonitoringStatusTests : IDisposable
         Assert.Equal("prêt", Summary(queue, "t1").GetProperty("audio").GetString());
     }
 
+    [Fact]
+    public void The_check_of_a_file_made_by_emby_is_shown_and_leaves_the_outcome_alone()
+    {
+        Seed(NewTask("t1", EncodeStatus.Assembling));
+        var queue = NewQueue();
+        queue.Snapshot().Single().Status = EncodeStatus.Assembling;
+        queue.OnConversionDone(new ConversionDone("t1", false, "durée trop courte de 2 s"));
+
+        queue.OnEmbyResultChecked(new EmbyResultChecked("t1", "vidéo finissant 41 ms après la source", "vidéo source 0-600, résultat 0-600"));
+        queue.OnEmbyResultChecked(new EmbyResultChecked("unknown", "ignored", null));
+
+        var summary = Summary(queue, "t1");
+        Assert.Equal("Failed", summary.GetProperty("status").GetString());
+        Assert.Equal("durée trop courte de 2 s", summary.GetProperty("error").GetString());
+        Assert.Equal("vidéo finissant 41 ms après la source", summary.GetProperty("embyResultProblem").GetString());
+        Assert.Equal("vidéo source 0-600, résultat 0-600", summary.GetProperty("embyResult").GetString());
+    }
+
+    [Fact]
+    public void A_file_made_by_emby_that_could_not_be_measured_still_says_so()
+    {
+        Seed(NewTask("t1", EncodeStatus.Failed));
+        var queue = NewQueue();
+
+        queue.OnEmbyResultChecked(new EmbyResultChecked("t1", "contrôle non terminé après 180 s", null));
+
+        var summary = Summary(queue, "t1");
+        Assert.Equal("contrôle non terminé après 180 s", summary.GetProperty("embyResultProblem").GetString());
+        Assert.Equal("non mesuré", summary.GetProperty("embyResult").GetString());
+    }
+
+    [Fact]
+    public void The_check_of_a_file_made_by_emby_travels_as_a_message()
+    {
+        var back = MessageJson.Deserialize(MessageJson.Serialize(new EmbyResultChecked("t1", null, "ligne")));
+        Assert.Equal(new EmbyResultChecked("t1", null, "ligne"), back);
+    }
+
     /// <summary>The page says the history survives restarts and what happens to a conversion in progress.</summary>
     [Fact]
     public void History_survives_a_restart()
@@ -146,10 +184,10 @@ public class MonitoringStatusTests : IDisposable
         static bool Shown(CoordinatorOptions o) => JsonDocument.Parse(JsonSerializer.Serialize(o.StatusSettings(), new JsonSerializerOptions(JsonSerializerDefaults.Web)))
             .RootElement.GetProperty("encodeAudioAhead").GetBoolean();
 
-        Assert.False(Shown(options));
-        // What Runtime.SetAudioAhead does to the running coordinator's options.
-        options.EncodeAudioAhead = true;
         Assert.True(Shown(options));
+        // What Runtime.SetAudioAhead does to the running coordinator's options.
+        options.EncodeAudioAhead = false;
+        Assert.False(Shown(options));
     }
 
     [Fact]

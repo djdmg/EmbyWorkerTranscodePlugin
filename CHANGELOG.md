@@ -8,6 +8,18 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.40 — 2026-11-03
+
+Built and published by GitHub Actions (release v0.7.40). Worker unchanged (0.7.20).
+
+### Added
+
+- **Plugin** — A conversion handed back to Emby after the workers could not finish is now checked too, for information: the history of the monitoring page shows whether Emby's file passes the sync check, and what it found if not. The file is delivered either way and the exit code stays Emby's; the check is limited to 3 minutes. Measured reason: a real HDR file came out of Emby's own ffmpeg one frame late (a duplicated frame, 42 ms) where the workers' conversion was in step. Not covered: conversions refused at the start, which were never in the plugin's hands.
+
+### Changed
+
+- **Plugin** — `EncodeAudioAhead` is now on by default, after measures on real files and the T28 bench. A server that already saved its settings keeps the value it saved.
+
 ## Plugin 0.7.39 — 2026-11-03
 
 Built and published by GitHub Actions (release v0.7.39). Worker unchanged (0.7.20).

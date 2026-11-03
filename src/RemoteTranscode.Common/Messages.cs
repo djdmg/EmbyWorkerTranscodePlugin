@@ -91,6 +91,7 @@ public sealed record WorkerLoad(double CpuPercent, double? GpuPercent, double Me
 [JsonDerivedType(typeof(ConversionReady), "conversionReady")]
 [JsonDerivedType(typeof(ConversionFailed), "conversionFailed")]
 [JsonDerivedType(typeof(ConversionDone), "conversionDone")]
+[JsonDerivedType(typeof(EmbyResultChecked), "embyResultChecked")]
 [JsonDerivedType(typeof(ShimCapacityQuery), "capacityQuery")]
 [JsonDerivedType(typeof(ShimCapacity), "capacity")]
 [JsonDerivedType(typeof(ShimPrepare), "prepare")]
@@ -224,6 +225,12 @@ public sealed record ConversionFailed(string TaskId, string Reason) : Message;
 /// verdict's usual assembly ran; that rejection would otherwise only be in Emby's ffmpeg log.
 /// </summary>
 public sealed record ConversionDone(string TaskId, bool Success, string? Error, string? Check = null, string? AudioAheadRejected = null) : Message;
+
+/// <summary>
+/// Shim → coordinator: the check of the file Emby's own ffmpeg made for a conversion handed back to it, for the monitoring page only: the file
+/// is delivered anyway. <paramref name="Problem"/> is null when it is in step with its source.
+/// </summary>
+public sealed record EmbyResultChecked(string TaskId, string? Problem, string? Check) : Message;
 
 public static class MessageJson
 {

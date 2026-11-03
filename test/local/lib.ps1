@@ -139,6 +139,7 @@ function Write-CoordinatorConfig([hashtable]$overrides = @{}) {
         OfferTimeoutSeconds        = 5
         EncodeSpoolDir             = 'encode'
         EncodeLocalFallback        = $true
+        EncodeAudioAhead           = $false
         ServerFfmpeg               = $Paths.ServerFfmpeg
         ServerFfprobe              = $Paths.ServerFfprobe
         ServerToolsWorkingDirectory = $null

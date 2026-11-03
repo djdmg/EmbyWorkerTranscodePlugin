@@ -108,9 +108,9 @@ public sealed class CoordinatorOptions
     /// While the workers encode the video, the server converts the conversion's audio ahead with Emby's own options (one
     /// at a time), so the assembly only copies streams instead of reading the whole source again
     /// to convert its audio. Used only for the commands where it gives the same file (see AudioAheadPlan); whenever
-    /// it is not ready or not right, the assembly converts the audio as before. Off until validated (audio/video sync).
+    /// it is not ready or not right, the assembly converts the audio as before.
     /// </summary>
-    public bool EncodeAudioAhead { get; set; } = false;
+    public bool EncodeAudioAhead { get; set; } = true;
 
     /// <summary>
     /// Every slice is encoded but the audio converted ahead is not ready yet: the assembly waits for it as long as
