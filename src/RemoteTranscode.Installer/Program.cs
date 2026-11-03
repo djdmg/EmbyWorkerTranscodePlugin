@@ -27,7 +27,17 @@ internal static class Program
                     Launch: !Has(args, "--no-launch"), KillProcesses: kill);
                 if (quiet)
                 {
-                    Log($"mise à jour {existing.Version} -> {Setup.Version} dans " + Setup.Install(update, new Progress<(int, string)>()));
+                    try
+                    {
+                        Log($"mise à jour {existing.Version} -> {Setup.Version} dans " + Setup.Install(update, new Progress<(int, string)>()));
+                    }
+                    catch (Exception e)
+                    {
+                        Log("ÉCHEC : " + e);
+                        if (update.Launch)
+                            RestartWorker(existing.Folder);
+                        return 1;
+                    }
                     return 0;
                 }
                 Application.Run(new UpdateForm(update, existing));
@@ -53,6 +63,28 @@ internal static class Program
             if (!quiet)
                 MessageBox.Show(e.Message, Setup.AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// A failed unattended update may have closed the worker already, and nobody is there to start it again (automatic
+    /// update: the worker then waits 24 h before trying this version again). Not from session 0, where it would have no
+    /// desktop, and not when it still runs, where a second start would only open its window.
+    /// </summary>
+    private static void RestartWorker(string folder)
+    {
+        try
+        {
+            string exe = Path.Combine(folder, Setup.AppExe);
+            using var self = System.Diagnostics.Process.GetCurrentProcess();
+            if (self.SessionId == 0 || !File.Exists(exe) || Setup.FindExisting() is not { Running: false })
+                return;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = true, WorkingDirectory = folder })?.Dispose();
+            Log("worker relancé après l'échec de la mise à jour");
+        }
+        catch (Exception e)
+        {
+            Log("relance du worker impossible : " + e.Message);
         }
     }
 

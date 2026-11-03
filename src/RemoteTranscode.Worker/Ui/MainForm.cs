@@ -20,6 +20,7 @@ public sealed class MainForm : Form
     private readonly Label serverLabel = new() { AutoSize = true };
     private readonly Label loadLabel = new() { AutoSize = true };
     private readonly Label queueLabel = new() { AutoSize = true };
+    private readonly Label updateLabel = new() { AutoSize = true, MaximumSize = new Size(820, 0) };
     private readonly Label capsLabel = new() { AutoSize = true, MaximumSize = new Size(820, 0) };
     private readonly CheckBox enabledBox = new() { Text = "Autoriser l'utilisation de ce PC", AutoSize = true };
     private readonly Button releaseButton = new() { Text = "Libérer le PC maintenant", AutoSize = true };
@@ -48,6 +49,7 @@ public sealed class MainForm : Form
     private readonly Label reclaimWarning = new() { AutoSize = true, ForeColor = Color.FromArgb(154, 103, 0), MaximumSize = new Size(560, 0) };
     private readonly DataGridView scheduleGrid = new() { Height = 130, Width = 560, AllowUserToResizeRows = false, RowHeadersVisible = false };
     private readonly CheckBox startupBox = new() { Text = "Démarrer avec Windows", AutoSize = true };
+    private readonly CheckBox autoUpdateBox = new() { Text = "Installer automatiquement les nouvelles versions du worker, quand il n'a aucune tâche en cours", AutoSize = true };
     // Each one restarts the worker: disabled while a start/stop/restart is in progress (see RefreshStatus).
     private readonly Button pairButton = new() { Text = "Associer", AutoSize = true };
     private readonly Button redetectButton = new() { Text = "Refaire la détection du matériel", AutoSize = true };
@@ -117,7 +119,7 @@ public sealed class MainForm : Form
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
         var actions = new FlowLayoutPanel { AutoSize = true };
         actions.Controls.AddRange([enabledBox, releaseButton]);
-        top.Controls.AddRange([stateLabel, reasonLabel, serverLabel, loadLabel, queueLabel, capsLabel, actions,
+        top.Controls.AddRange([stateLabel, reasonLabel, serverLabel, loadLabel, queueLabel, updateLabel, capsLabel, actions,
             new Label { Text = "Tâches en cours", AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Margin = new Padding(0, 10, 0, 2) }]);
 
         jobsList.Columns.Add("Fichier", 220);
@@ -176,6 +178,8 @@ public sealed class MainForm : Form
         queueLabel.Text = service?.ConversionQueue is { } q
             ? $"File de conversion d'Emby : {q.Remaining} élément(s) à convertir" + (DateTime.Now - q.At > TimeSpan.FromMinutes(2) ? $" (au {q.At:HH:mm})" : "")
             : "File de conversion d'Emby : —";
+
+        updateLabel.Text = $"Mises à jour : {host.Updater?.Status ?? "inactives"}";
 
         var caps = host.Capabilities;
         capsLabel.Text = caps is null ? "Capacités : détection en attente" :
@@ -252,6 +256,13 @@ public sealed class MainForm : Form
             Row("Code d'association :", pairingBox, pairButton),
             Hint("Le code est affiché par le serveur : Tableau de bord d'Emby → Transcodage distribué → Associer un worker. Il contient un secret révocable.")));
 
+        // Right under the pairing, which is where a first installation opens: on by default, but seen.
+        root.Controls.Add(Group("Mises à jour",
+            Row(autoUpdateBox),
+            Hint("Le worker consulte lui-même les publications du projet sur GitHub, télécharge le programme d'installation, vérifie son empreinte puis le lance, " +
+                 "sans jamais revenir à une version plus ancienne. Le serveur Emby ne peut lui imposer aucun programme. " +
+                 "Ces programmes ne sont pas signés : la confiance repose sur le dépôt GitHub du projet. Décochez pour installer vous-même chaque version (aucun contact avec GitHub).")));
+
         root.Controls.Add(Group("Traitements",
             Row("FFmpeg :", ffmpegBox, browse),
             Hint("Laisser vide pour utiliser le FFmpeg intégré au worker."),
@@ -327,6 +338,7 @@ public sealed class MainForm : Form
             scheduleGrid.Rows.Add(cells);
         }
         startupBox.Checked = WorkerHost.StartWithWindows;
+        autoUpdateBox.Checked = c.AutoUpdate;
     }
 
     private async Task SaveSettingsAsync()
@@ -348,6 +360,7 @@ public sealed class MainForm : Form
         c.HardwareEncodingForPlayback = hwPlaybackBox.Checked;
         c.HardwareDecoding = hwDecodeBox.Checked;
         c.MaxJobs = (int)maxJobsBox.Value;
+        c.AutoUpdate = autoUpdateBox.Checked;
         c.Availability = new AvailabilitySettings
         {
             Mode = autoRadio.Checked ? AvailabilityMode.Automatic : AvailabilityMode.Manual,

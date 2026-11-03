@@ -59,11 +59,35 @@ public sealed class TrayApp : ApplicationContext
         timer.Start();
         Refresh();
 
+        AnnounceAutoUpdate();
         if (!host.IsPaired)
             ShowForm(1);
         else if (openTab is { } tab)
             ShowForm(tab);
         _ = host.StartAsync();
+    }
+
+    /// <summary>
+    /// Once per PC: a worker updated by hand to the first version with automatic updates has them on without having seen
+    /// the setting. A first installation opens on the settings, where the box is; the notice and the log say it anyway.
+    /// </summary>
+    private void AnnounceAutoUpdate()
+    {
+        var config = host.Config;
+        if (config.AutoUpdateNoticeShown || !config.AutoUpdate)
+            return;
+        config.AutoUpdateNoticeShown = true;
+        try
+        {
+            config.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            host.Logger.Log($"configuration non enregistrée : {ex.Message}");
+        }
+        const string notice = "Les mises à jour automatiques du worker sont activées. Pour les désactiver : Paramètres, « Mises à jour ».";
+        host.Logger.Log(notice);
+        icon.ShowBalloonTip(15000, "Emby Remote Worker", notice, ToolTipIcon.Info);
     }
 
     /// <summary>

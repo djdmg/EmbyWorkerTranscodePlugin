@@ -60,6 +60,8 @@ internal static partial class Program
         var logger = new Logger();
         logger.Log("démarrage de l'interface");
         var host = new WorkerHost(logger);
+        var updater = new WorkerUpdater(host, typeof(WorkerHost).Assembly.GetName().Version ?? new Version(0, 0, 0), logger.Log);
+        host.Updater = updater;
         // "--show [tab]" opens the window at start (0 status, 1 settings, 2 logs).
         int? tab = Array.IndexOf(args, "--show") is int i and >= 0 ? int.TryParse(Arg(args, "--show"), out int t) ? t : 0 : null;
         var tray = new TrayApp(host, tab);
@@ -97,7 +99,9 @@ internal static partial class Program
             }
         }) { IsBackground = true, Name = "exit-request" };
         exiter.Start();
+        updater.Start();
         Application.Run(tray);
+        updater.Stop();
         logger.Log("arrêt");
         return 0;
     }
