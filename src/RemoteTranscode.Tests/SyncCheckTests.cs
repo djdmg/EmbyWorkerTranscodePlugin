@@ -299,11 +299,11 @@ public class SyncCheckTests
     }
 
     [Fact]
-    public void An_aac_whose_last_packet_says_10_ms_more_passes_but_one_packet_more_does_not()
+    public void An_aac_may_end_a_packet_late_but_not_two()
     {
         var video = Video(Grid(0, Frame25, Duration));
         Assert.Null(SyncCheck.Verify(Source(), 0, File(0, video, Audio(1, "aac", Grid(-AacPriming, AacPacket, Duration), AacPacket, 0, end: Duration + 0.010)), Encoded, [310]));
-        Assert.Contains("finissant", SyncCheck.Verify(Source(), 0, File(0, video, Audio(1, "aac", Grid(-AacPriming, AacPacket, Duration + AacPacket), AacPacket, 0, end: Duration + AacPacket)), Encoded, [310]));
+        Assert.Contains("finissant", SyncCheck.Verify(Source(), 0, File(0, video, Audio(1, "aac", Grid(-AacPriming, AacPacket, Duration + 2 * AacPacket), AacPacket, 0, end: Duration + 2 * AacPacket)), Encoded, [310]));
     }
 
     [Fact]
@@ -315,8 +315,6 @@ public class SyncCheckTests
         // 17 ms past the source's end, measured.
         Assert.Null(SyncCheck.Verify(Source(), 0, File(0, video, Audio(1, "mp3", Grid(first, 0.024, Duration), 0.024, 0, end: Duration + 0.017)), expected, [310]));
         Assert.Contains("finissant", SyncCheck.Verify(Source(), 0, File(0, video, Audio(1, "mp3", Grid(first, 0.024, Duration - 0.05), 0.024, 0, end: Duration - 0.05)), expected, [310]));
-        // AAC does not: a packet too much is one.
-        Assert.Contains("finissant", SyncCheck.Verify(Source(), 0, File(0, video, Audio(1, "aac", Grid(-AacPriming, AacPacket, Duration + 0.02), AacPacket, 0, end: Duration + 0.02)), Encoded, [310]));
     }
 
     [Fact]
@@ -500,9 +498,11 @@ public class SyncCheckTests
     [Fact]
     public void Windows_straddle_the_lists_boundaries_up_to_a_limit_and_always_cover_the_quarters()
     {
-        // Two hours in chunks of 30 s: spread over the file, no more than the limit (plus the quarters, which they already cover).
+        // Two hours in chunks of 30 s: every boundary, a slice with no window could be wrong by any amount.
         var many = SyncCheck.WindowTimes(7200, Grid(30, 30, 7200));
-        Assert.InRange(many.Count, SyncCheck.MaxWindows, SyncCheck.MaxWindows + 3);
+        Assert.Equal(239, many.Count);
+        // Beyond the limit: spread over the file (plus the quarters, which they already cover).
+        Assert.InRange(SyncCheck.WindowTimes(72000, Grid(30, 30, 72000)).Count, SyncCheck.MaxWindows, SyncCheck.MaxWindows + 3);
         Assert.True(many.Zip(many.Skip(1), (a, b) => b - a).Max() < 7200 / 8.0);
         Assert.Equal(Enumerable.Range(0, many.Count).Select(i => many[i]).OrderBy(t => t), many);
         // Each around a boundary.

@@ -23,7 +23,7 @@ public sealed class ConversionSession : IDisposable
     private readonly Stopwatch elapsed = Stopwatch.StartNew();
     private volatile bool quitRequested;
     // Long enough for the windows of a large file on a slow disk: past it, the file is rejected, as for any measure that fails.
-    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(180);
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(600);
 
     private ConversionSession(ShimConfig config, StderrWriter err, ClientWebSocket socket, string[] args, string taskId)
     {
@@ -121,7 +121,7 @@ public sealed class ConversionSession : IDisposable
             if (first.Problem is null || first.QuitLate)
             {
                 await SendDoneAsync(new ConversionDone(taskId, first.Problem is null, first.Problem, lastCheck));
-                return first.Code;
+                return first.Problem is null ? first.Code : RemoveRejected();
             }
             // The chunks are fine: the usual assembly converts the audio itself.
             audioAheadRejected = first.Problem;
@@ -138,13 +138,22 @@ public sealed class ConversionSession : IDisposable
             return code;
         await SendDoneAsync(new ConversionDone(taskId, problem is null, problem, lastCheck, audioAheadRejected));
         // A 'q' during verification still reaches the finished assembly run (it owns stdin until the next start).
-        if (problem is null || quitRequested || quitLate)
+        if (problem is null)
             return code;
+        if (quitRequested || quitLate)
+            return RemoveRejected();
 
         // Never hand Emby a doubtful file: remove it and convert the original way.
         err.Line($"remote-transcode: résultat rejeté ({problem}), conversion sur le serveur");
         try { File.Delete(plan.Output); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return await LocalFfmpeg.RunAsync(config, args, StdinReader.Shared);
+
+        // A 'q' during the check of a file that failed it: nothing to convert any more, and no doubtful file left behind.
+        int RemoveRejected()
+        {
+            try { File.Delete(plan.Output); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            return 1;
+        }
     }
 
     /// <summary>

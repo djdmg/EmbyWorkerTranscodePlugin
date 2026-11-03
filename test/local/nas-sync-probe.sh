@@ -19,7 +19,7 @@ import json, os, subprocess, sys, time
 
 T = os.environ["T"]
 FFPROBE = [T + "/lib/ld-linux-x86-64.so.2", "--library-path", T + "/lib:" + T + "/ffmpeg/lib", T + "/bin/ffprobe"]
-TOLERANCE, ON_GRID, WINDOW, MAX_WINDOWS, PRE_TS, POST, TAIL = 0.003, 0.002, 1.5, 32, 2.5, 2.0, 30.0
+TOLERANCE, ON_GRID, WINDOW, MAX_WINDOWS, PRE_TS, POST, TAIL = 0.003, 0.002, 1.5, 1200, 2.5, 2.0, 30.0
 PRIMING = {"copy": 0, "aac": 1024, "libmp3lame": 1105, "mp3": 1105, "ac3": 256, "eac3": 256, "libopus": 312, "opus": 312,
            "mp2": 481, "libtwolame": 481, "libvorbis": 128, "vorbis": 128, "flac": 0, "alac": 0, "dca": 0, "dts": 0}
 ENTRIES = "format=format_name,start_time,duration:stream=index,codec_type,codec_name,sample_rate,start_time,r_frame_rate,avg_frame_rate:stream_disposition=attached_pic"
@@ -214,7 +214,7 @@ for i, (s, r) in enumerate(zip(audio_s, audio_r)):
         judge(gone <= 2 * margin + TOLERANCE and (off <= TOLERANCE or not source_on),
               "audio %d window %.3f: nearest sound %s (limit %s), result off its grid by %s, source on its own: %s" % (i + 1, w, ms(gone), ms(2 * margin + TOLERANCE), ms(off), source_on))
     end_s, end_r = from_s[-1][0] + from_s[-1][1], to[-1][0] + to[-1][1]
-    late = margin + TOLERANCE if enc == "copy" or enc not in ("aac", "ac3", "eac3", "libopus", "opus", "flac") else sr_step / 2 + TOLERANCE if enc == "aac" else 2 * TOLERANCE
+    late = margin + TOLERANCE if enc == "copy" or enc not in ("ac3", "eac3", "libopus", "opus", "flac") else 2 * TOLERANCE
     early = margin + TOLERANCE if enc == "copy" else 2 * TOLERANCE
     judge(end_r - end_s <= late and end_s - end_r <= early, "audio %d end: %.6f for %.6f (%s, limits +%s -%s)" % (i + 1, end_r, end_s, ms(end_r - end_s), ms(late), ms(early)))
 

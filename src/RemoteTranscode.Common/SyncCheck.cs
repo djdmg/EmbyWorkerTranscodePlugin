@@ -191,8 +191,11 @@ public static class SyncCheck
     // A source frame is on its grid within Matroska's rounding of its time, and of the first frame's.
     private const double OnGrid = 0.002;
 
-    /// <summary>Most windows read in a file, on top of its start and end.</summary>
-    public const int MaxWindows = 32;
+    /// <summary>
+    /// Most windows read in a file, on top of its start and end: enough for every chunk boundary of a 10-hour file at 30 s a chunk, since a
+    /// slice with no window could be wrong by any amount and be right again at its end.
+    /// </summary>
+    public const int MaxWindows = 1200;
 
     /// <summary>What is compared in each window. Long enough for a few dozen frames and audio packets, whatever their lengths.</summary>
     public const double WindowSeconds = 1.5;
@@ -398,6 +401,10 @@ public static class SyncCheck
         double sourceFrame = source.FrameSeconds > 0 ? source.FrameSeconds : MeanGap(from);
         bool sameRate = sourceFrame > 0 && Math.Abs(sourceFrame - measured) <= 0.002 * sourceFrame;
         double end = from[^1];
+        // Windows the source's read left empty are not compared: past half of them, the read is what failed, not the source.
+        var within = windows.Where(w => w + WindowSeconds <= end).ToList();
+        if (within.Count(w => !from.Any(t => t >= w && t <= w + WindowSeconds)) * 2 > within.Count)
+            return "vérification impossible : images de la source absentes de la plupart des fenêtres lues";
         foreach (double w in windows)
         {
             var sourceFrames = from.Where(t => t >= w && t <= w + WindowSeconds).ToList();
@@ -406,7 +413,8 @@ public static class SyncCheck
             // Half an output frame is what ffmpeg's frame grid does on purpose when frames do not lie on it: at -r 25 on 23.976 fps, measured
             // frame by frame, up to 38 ms early and 39 ms late, half a frame of grid plus up to half a frame of a slice's alignment, a
             // frame kept on included. Nothing tighter is true there. Off the source's own grid (a hole of 85 ms) likewise.
-            bool onGrid = sameRate && sourceFrames.All(t => Math.Abs(Remainder(t - first, sourceFrame)) <= OnGrid);
+            // At 250 frames a second or more, every time would count as on the grid.
+            bool onGrid = sameRate && sourceFrame > 2 * OnGrid && sourceFrames.All(t => Math.Abs(Remainder(t - first, sourceFrame)) <= OnGrid);
             double tolerance = onGrid ? Tolerance : measured / 2 + Tolerance;
             foreach (double t in sourceFrames)
             {
@@ -518,11 +526,11 @@ public static class SyncCheck
         // An encoder gives back every sample and its last packet says so (0 to 0.2 ms measured): this is what shows a shift by whole packets
         // lasting to the end, which leaves the grid alone. MP3 pads its last packet (17 ms measured), so only a stream ending early is seen
         // there. A copied stream's last packet reads its container's idea of its length (11 ms apart measured, Matroska to MP4), but its
-        // packets were compared one by one. AAC copied through the file prepared ahead keeps every packet where it was, but with Emby's ffmpeg 5.1
-        // its last packet says 10 ms more (10.667 ms read 20.667 ms, on two real files; same packets, same count, same times). That moves nothing:
-        // half a packet still tells a shift by whole packets, and the grid above tells anything smaller.
+        // packets were compared one by one. AAC may read later too: with Emby's ffmpeg 5.1 its last packet said 10 ms more through the file prepared
+        // ahead (same packets, same times, two real files), and on sound starting at 0.5 s it ended 16 ms late in both assemblies. A whole packet late
+        // to the end is therefore not seen on those encoders; the audio is one encode, with no known cause for it.
         double sourceEnd = from[^1].Time + (from[^1].Length > 0 ? from[^1].Length : sourceStep), resultEnd = to[^1].Time + (to[^1].Length > 0 ? to[^1].Length : resultStep);
-        double late = copied || PadsLastPacket(encoder) ? margin + Tolerance : encoder == "aac" ? resultStep / 2 + Tolerance : 2 * Tolerance;
+        double late = copied || PadsLastPacket(encoder) ? margin + Tolerance : 2 * Tolerance;
         double early = copied ? margin + Tolerance : 2 * Tolerance;
         if (resultEnd - sourceEnd > late || sourceEnd - resultEnd > early)
             return Reason($"{name} finissant à {resultEnd:0.000}s au lieu de {sourceEnd:0.000}s");
@@ -530,7 +538,7 @@ public static class SyncCheck
     }
 
     // Encoders whose last packet is not cut to the samples it holds: all but those measured exact.
-    private static bool PadsLastPacket(string? encoder) => encoder is not ("aac" or "ac3" or "eac3" or "libopus" or "opus" or "flac");
+    private static bool PadsLastPacket(string? encoder) => encoder is not ("ac3" or "eac3" or "libopus" or "opus" or "flac");
 
     // First time of a list with nothing within the distance in another (sorted) one.
     private static double? FirstUnmatched(IEnumerable<double> times, List<double> sorted, double distance)
