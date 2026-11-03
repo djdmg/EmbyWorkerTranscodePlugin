@@ -191,6 +191,10 @@ public static class SyncCheck
     // A source frame is on its grid within Matroska's rounding of its time, and of the first frame's.
     private const double OnGrid = 0.002;
 
+    // The video may lie 6 ms off: Emby's ffprobe and the workers' ffmpeg can read a file's zero 5 ms apart, a constant shift nobody can perceive
+    // (accepted by the owner). Well under the 45 ms from which a shift is noticed (ITU-R BT.1359); the audio keeps Tolerance.
+    private const double VideoTolerance = 0.006;
+
     /// <summary>
     /// Most windows read in a file, on top of its start and end: enough for every chunk boundary of a 10-hour file at 30 s a chunk, since a
     /// slice with no window could be wrong by any amount and be right again at its end.
@@ -392,7 +396,7 @@ public static class SyncCheck
         var to = result.Packets.Where(p => p.Pts != null).Select(p => p.Pts!.Value).OrderBy(t => t).ToList();
         if (from.Count == 0 || to.Count == 0)
             return $"vérification impossible : aucune image lue ({(from.Count == 0 ? "source" : "résultat")})";
-        if (Math.Abs(to[0] - first) > Tolerance)
+        if (Math.Abs(to[0] - first) > VideoTolerance)
             return Reason($"vidéo commençant à {to[0]:0.000}s au lieu de {first:0.000}s : décalée de bout en bout");
         double measured = outputFrame ?? MeanGap(to);
         if (measured <= 0)
@@ -401,6 +405,9 @@ public static class SyncCheck
         double sourceFrame = source.FrameSeconds > 0 ? source.FrameSeconds : MeanGap(from);
         bool sameRate = sourceFrame > 0 && Math.Abs(sourceFrame - measured) <= 0.002 * sourceFrame;
         double end = from[^1];
+        // With Emby's -r, ffmpeg lays the frames on a grid of its own: a source starting off it (62 ms at 23.976 fps) lands up to half a frame apart
+        // in some slices (20 ms measured), not growing. Accepted by the owner, as with any other source off the grid.
+        bool onOutputGrid = outputFrame is null || Math.Abs(Remainder(first, measured)) <= OnGrid;
         // Windows the source's read left empty are not compared: past half of them, the read is what failed, not the source.
         var within = windows.Where(w => w + WindowSeconds <= end).ToList();
         if (within.Count(w => !from.Any(t => t >= w && t <= w + WindowSeconds)) * 2 > within.Count)
@@ -414,8 +421,8 @@ public static class SyncCheck
             // frame by frame, up to 38 ms early and 39 ms late, half a frame of grid plus up to half a frame of a slice's alignment, a
             // frame kept on included. Nothing tighter is true there. Off the source's own grid (a hole of 85 ms) likewise.
             // At 250 frames a second or more, every time would count as on the grid.
-            bool onGrid = sameRate && sourceFrame > 2 * OnGrid && sourceFrames.All(t => Math.Abs(Remainder(t - first, sourceFrame)) <= OnGrid);
-            double tolerance = onGrid ? Tolerance : measured / 2 + Tolerance;
+            bool onGrid = sameRate && onOutputGrid && sourceFrame > 2 * OnGrid && sourceFrames.All(t => Math.Abs(Remainder(t - first, sourceFrame)) <= OnGrid);
+            double tolerance = onGrid ? VideoTolerance : measured / 2 + Tolerance;
             foreach (double t in sourceFrames)
             {
                 double distance = Nearest(to, t);
@@ -430,7 +437,7 @@ public static class SyncCheck
         // AVI: the last decoded frame has no time, the end is known to 2 frames at best (see VerifyVideoSpan), and the decoder's delay added to the
         // last decoding time overshoots by up to that delay (0.16 s of delay on packed B-frames: last frame exactly 3 frames before the estimate).
         double endTolerance = approximate ? Math.Max(3 * measured, dtsDelay + measured)
-            : sameRate && Math.Abs(Remainder(end - first, sourceFrame)) <= OnGrid ? Tolerance
+            : sameRate && onOutputGrid && Math.Abs(Remainder(end - first, sourceFrame)) <= OnGrid ? VideoTolerance
             : measured + Tolerance;
         if (Math.Abs(to[^1] - end) > endTolerance)
             return Reason($"dernière image de la vidéo à {to[^1]:0.000}s au lieu de {end:0.000}s");

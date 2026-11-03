@@ -183,8 +183,8 @@ public class SyncCheckTests
     // ---- Desynchronized: rejected ----
 
     [Theory]
-    [InlineData(0.004)]
-    [InlineData(-0.004)]
+    [InlineData(0.007)]
+    [InlineData(-0.007)]
     [InlineData(0.02)]     // half a frame at 25 fps, which the former check let through
     [InlineData(0.079)]    // video put at the file's start, the 0.7.34 fault
     public void A_video_moved_at_the_start_is_rejected(double shift)

@@ -19,7 +19,7 @@ import json, os, subprocess, sys, time
 
 T = os.environ["T"]
 FFPROBE = [T + "/lib/ld-linux-x86-64.so.2", "--library-path", T + "/lib:" + T + "/ffmpeg/lib", T + "/bin/ffprobe"]
-TOLERANCE, ON_GRID, WINDOW, MAX_WINDOWS, PRE_TS, POST, TAIL = 0.003, 0.002, 1.5, 1200, 2.5, 2.0, 30.0
+VIDEO_TOLERANCE, TOLERANCE, ON_GRID, WINDOW, MAX_WINDOWS, PRE_TS, POST, TAIL = 0.006, 0.003, 0.002, 1.5, 1200, 2.5, 2.0, 30.0
 PRIMING = {"copy": 0, "aac": 1024, "libmp3lame": 1105, "mp3": 1105, "ac3": 256, "eac3": 256, "libopus": 312, "opus": 312,
            "mp2": 481, "libtwolame": 481, "libvorbis": 128, "vorbis": 128, "flac": 0, "alac": 0, "dca": 0, "dts": 0}
 ENTRIES = "format=format_name,start_time,duration:stream=index,codec_type,codec_name,sample_rate,start_time,r_frame_rate,avg_frame_rate:stream_disposition=attached_pic"
@@ -149,7 +149,7 @@ if fs is not None and first is not None and video_s and video_r:
         video_s.get("start_time"), video_s.get("r_frame_rate"), ["%.6f" % x for x in frames_s[:3]], approximate, ms(delay)))
     print("VIDEO result stream start=%s r_frame_rate=%s first packets %s" % (video_r.get("start_time"), video_r.get("r_frame_rate"), ["%.6f" % x for x in frames_r[:3]]))
     if frames_s and frames_r:
-        judge(abs(frames_r[0] - first) <= TOLERANCE, "video start: %.6f for %.6f (%s, tolerance %s)" % (frames_r[0], first, ms(frames_r[0] - first), ms(TOLERANCE)))
+        judge(abs(frames_r[0] - first) <= VIDEO_TOLERANCE, "video start: %.6f for %.6f (%s, tolerance %s)" % (frames_r[0], first, ms(frames_r[0] - first), ms(VIDEO_TOLERANCE)))
         out_frame = rate(args[1]) if len(args) > 1 and args[1] not in ("", "-") else mean_gap(frames_r)
         src_frame = rate(video_s.get("r_frame_rate")) or mean_gap(frames_s)
         same = bool(src_frame) and abs(src_frame - out_frame) <= 0.002 * src_frame
@@ -159,14 +159,14 @@ if fs is not None and first is not None and video_s and video_r:
             if not sw:
                 print("  window %.3f: no source frame" % w)
                 continue
-            grid = same and all(abs(rem(t - first, src_frame)) <= ON_GRID for t in sw)
-            tol = TOLERANCE if grid else out_frame / 2 + TOLERANCE
+            grid = same and (len(args) <= 1 or args[1] in ("", "-") or abs(rem(first, out_frame)) <= ON_GRID) and all(abs(rem(t - first, src_frame)) <= ON_GRID for t in sw)
+            tol = VIDEO_TOLERANCE if grid else out_frame / 2 + TOLERANCE
             dist = [nearest(frames_r, t) for t in sw]
             worst = max(dist, key=lambda d: abs(d))
             near = [t for t in frames_r if w <= t <= w + WINDOW]
             over = any(b - a < out_frame / 4 for a, b in zip(near, near[1:]))
             judge(abs(worst) <= tol and not over, "video window %.3f: %d frames, worst %s, on the grid: %s, tolerance %s%s" % (w, len(sw), ms(worst), grid, ms(tol), ", OVERLAP" if over else ""))
-        end_tol = max(3 * out_frame, delay + out_frame) if approximate else TOLERANCE if same and abs(rem(frames_s[-1] - first, src_frame)) <= ON_GRID else out_frame + TOLERANCE
+        end_tol = max(3 * out_frame, delay + out_frame) if approximate else VIDEO_TOLERANCE if same and abs(rem(frames_s[-1] - first, src_frame)) <= ON_GRID else out_frame + TOLERANCE
         judge(abs(frames_r[-1] - frames_s[-1]) <= end_tol, "video end: last frame %.6f for %.6f (%s, tolerance %s)" % (frames_r[-1], frames_s[-1], ms(frames_r[-1] - frames_s[-1]), ms(end_tol)))
     else:
         judge(False, "no video packet read")
