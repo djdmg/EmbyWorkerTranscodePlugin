@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using RemoteTranscode.Common;
 
 namespace RemoteTranscode.Coordinator;
@@ -100,6 +101,76 @@ public sealed partial class EncodeQueue
         {
             if (spoolPins.Unpin(request.SpoolId))
                 DeleteSpool(request.SpoolId);
+        }
+    }
+
+    /// <summary>
+    /// Reads the first frame of each worker run from its first chunk (<see cref="SliceShiftCheck"/>). Returns the reason to
+    /// reject the conversion, null otherwise: a chunk that cannot be read only leaves its run unjudged.
+    /// </summary>
+    private async Task<string?> SliceShiftProblemAsync(EncodeTask task)
+    {
+        var clock = Stopwatch.StartNew();
+        List<(RunStart Run, string Path)> runs;
+        double? setFrame;
+        lock (gate)
+        {
+            setFrame = task.OutputFrameTime();
+            runs = task.Slices.OrderBy(s => s.Index)
+                .SelectMany(s => s.WorkerRuns
+                    .Where(r => task.Chunks.Any(c => c.Index == r.Key))
+                    .Select(r => (new RunStart(s.Index + 1, r.Key, r.Value.Start, r.Value.FileStart, s.BoundaryFileStart), ChunkPath(task.Id, r.Key))))
+                .ToList();
+        }
+        if (runs.Count == 0)
+            return null;
+        return await Task.Run(() =>
+        {
+            var shifted = new List<(int Slice, double Shift)>();
+            int measured = 0;
+            double largest = 0;
+            foreach (var (run, path) in runs)
+            {
+                try
+                {
+                    using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan);
+                    var chunk = SliceShiftCheck.MeasureStart(run.Chunk, SliceShiftCheck.FirstFrameTimes(file));
+                    if (SliceShiftCheck.Shift(run, chunk.FirstPts) is not { } shift)
+                        continue;
+                    measured++;
+                    largest = Math.Max(largest, Math.Abs(shift));
+                    if (SliceShiftCheck.IsShifted(shift, setFrame, chunk.FrameSeconds))
+                        shifted.Add((run.Slice, shift));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    logger.LogDebug("Conversion {Id}: first chunk of slice {Slice} not read ({Error})", task.Id, run.Slice, ex.GetType().Name);
+                }
+            }
+            logger.LogInformation("Conversion {Id}: first frame of {Measured} of {Runs} worker runs read in {Ms:0} ms, largest shift {Shift:0.0} ms",
+                task.Id, measured, runs.Count, clock.Elapsed.TotalMilliseconds, largest * 1000);
+            return SliceShiftCheck.Problem(shifted);
+        });
+    }
+
+    /// <summary>
+    /// A conversion refused before its assembly goes the way of one refused after it: failure report and spool kept
+    /// (<see cref="OnConversionDone"/>), and Emby's original command on the server, which the shim runs on this message.
+    /// </summary>
+    private async Task RejectBeforeAssemblyAsync(EncodeTask task, string problem)
+    {
+        // Emby may have stopped the conversion during the measure: nothing to reject then.
+        lock (gate)
+            if (task.Status != EncodeStatus.Assembling)
+                return;
+        OnConversionDone(new ConversionDone(task.Id, false, problem));
+        try
+        {
+            await task.Shim!.SendAsync(new ConversionFailed(task.Id, $"résultat rejeté ({problem})"));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Conversion {Id}: rejection not sent to the shim ({Error})", task.Id, ex.GetType().Name);
         }
     }
 

@@ -62,6 +62,34 @@ public sealed class EncodeSlice
     /// <summary>The file's start as the server's ffmpeg reads it, for the workers (see <see cref="JobOffer"/>); null: not sent.</summary>
     public double? ServerFileStart { get; init; }
 
+    /// <summary>The file's start as the server's ffprobe read it when the boundaries were set; they count from it (see <see cref="SliceShiftCheck"/>).</summary>
+    [JsonIgnore]
+    public double BoundaryFileStart { get; init; }
+
+    /// <summary>
+    /// The worker runs whose first frame is known and can be checked: first chunk number → the source frame it starts on
+    /// and the file's start as that run's ffmpeg read it. See <see cref="SliceShiftCheck"/>.
+    /// </summary>
+    [JsonIgnore]
+    public Dictionary<int, (double Start, double FileStart)> WorkerRuns { get; } = [];
+
+    /// <summary>
+    /// A worker's current run ended and said where its file starts. Kept when the run sought a known frame: the slice's
+    /// start (the first slice's does not seek) or the source frame it resumed from. Call under the lock.
+    /// </summary>
+    public void NoteWorkerRun(double fileStart)
+    {
+        if (RunStartIndex == FirstChunk ? Index > 0 : RunStartSeconds == ResumeFrame)
+            WorkerRuns[RunStartIndex] = (RunStartSeconds, fileStart);
+    }
+
+    /// <summary>A new run replaces the chunks from this one on: the runs that made them no longer count. Call under the lock.</summary>
+    public void ForgetRunsFrom(int index)
+    {
+        foreach (int run in WorkerRuns.Keys.Where(k => k >= index).ToList())
+            WorkerRuns.Remove(run);
+    }
+
     /// <summary>The scheduler was woken once for the current run nearing its end, to start the worker's next slice ahead.</summary>
     [JsonIgnore]
     public bool EndingSignalled { get; set; }
@@ -701,6 +729,7 @@ public sealed partial class EncodeQueue : IJobOwner
             SeekMargin = seekMargin,
             // The bench sets its own margin to provoke a skipped frame: nothing must correct it then.
             ServerFileStart = options.EncodeSeekMarginSeconds is null ? b.FileStart : null,
+            BoundaryFileStart = b.FileStart,
             Start = b.Time,
             End = i + 1 < bounds.Count ? bounds[i + 1].Time : duration,
             Last = i + 1 == bounds.Count,
@@ -1052,6 +1081,7 @@ public sealed partial class EncodeQueue : IJobOwner
                 plan = plan with { Prefetch = [new ByteRange(next.ByteStart!.Value, Math.Min(next.ByteEnd!.Value, inputSize) - next.ByteStart.Value)] };
             // Claimed: no second run can start for this slice. Chunks past the resume point belong to an older run.
             task.Chunks.RemoveAll(c => c.Index >= startIndex && c.Index < slice.FirstChunk + EmbyConversionPlanner.ChunksPerSlice);
+            slice.ForgetRunsFrom(startIndex);
             slice.Worker = OfferMarker;
             slice.JobId = null;
             slice.RunStartSeconds = startSeconds;
@@ -1356,6 +1386,11 @@ public sealed partial class EncodeQueue : IJobOwner
             : $"audio converted at assembly ({task.Audio ?? "désactivé"})");
         string listFile = Path.Combine(SpoolDir(task.Id), "concat.txt");
         await File.WriteAllTextAsync(listFile, list.ToString());
+        if (await SliceShiftProblemAsync(task) is { } shifted)
+        {
+            await RejectBeforeAssemblyAsync(task, shifted);
+            return;
+        }
         try
         {
             await task.Shim!.SendAsync(new ConversionReady(task.Id, listFile, audioFile, audioOffset, task.AssemblyVideoOffset()));
@@ -1468,6 +1503,7 @@ public sealed partial class EncodeQueue : IJobOwner
                 return;
             // The server's runs are always zscale (a libplacebo conversion never passes ServerCanEncodeAsync).
             FreezeToneMapping(task, LocalWorkerName);
+            slice.ForgetRunsFrom(plan.StartIndex);
             slice.Worker = LocalWorkerName;
             slice.JobId = null;
             slice.RunStartSeconds = startSeconds;
@@ -2132,7 +2168,10 @@ public sealed partial class EncodeQueue : IJobOwner
             slice.Worker = null;
             slice.Speed = 0;
             if (ended.InputStart is { } inputStart)
+            {
                 task.DiagnosticsLog.FileStarts.TryAdd(MachineKind(task, job.Worker), inputStart);
+                slice.NoteWorkerRun(inputStart);
+            }
             if (ended.SeekCorrection is { } correction)
                 task.ShiftRun(slice, correction);
             bool covers = ended.ExitCode == 0 && task.Covers(slice);

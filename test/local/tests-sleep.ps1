@@ -820,8 +820,10 @@ function T26 {
 }
 # Source à 25 i/s dont le début est lu 21 ms plus tard par le ffmpeg des workers que par celui d'Emby : plus d'une demi-image,
 # donc la marge de seek (20 ms) ne suffit pas. Le faux ffprobe reproduit l'écart du vrai serveur. T27a, sans correction de -ss
-# (marge imposée de 20 ms, qui coupe aussi l'envoi du début lu par le serveur) : la dernière tranche perd sa dernière image,
-# c'est le défaut constaté le 02/11. T27b, avec correction : à l'image près.
+# (marge imposée de 20 ms, qui coupe aussi l'envoi du début lu par le serveur) : chaque tranche qui se cale commence une image
+# trop tard, le défaut constaté le 02/11. Le contrôle avant assemblage (SliceShiftCheck) le voit dans les temps encodés : rien
+# n'est assemblé, le résultat est rejeté et la commande d'Emby refait la conversion, à l'image près. T27b, avec correction :
+# à l'image près sans rejet.
 #   pwsh -File run-tests.ps1 -Only T27
 function T27 {
     $dst = Join-Path $Paths.Media 'film_25_start21.mkv'
@@ -842,7 +844,7 @@ function T27 {
     $srcV = Measure-Video $dst
     try {
         foreach ($variant in @(
-                @{ Id = 'a'; Options = @{ EncodeLocalAlongsideWorkers = $false; ServerFfprobe = $fakeProbe; EncodeSeekMarginSeconds = 0.02 }; Fixed = $false; Label = 'sans correction, le défaut est reproduit' },
+                @{ Id = 'a'; Options = @{ EncodeLocalAlongsideWorkers = $false; ServerFfprobe = $fakeProbe; EncodeSeekMarginSeconds = 0.02 }; Fixed = $false; Label = 'sans correction, tranches décalées rejetées, conversion refaite par Emby' },
                 @{ Id = 'b'; Options = @{ EncodeLocalAlongsideWorkers = $false; ServerFfprobe = $fakeProbe }; Fixed = $true; Label = 'avec correction, à l''image près' })) {
             Restart-BenchCoordinator $variant.Options "coordinator-before-t27$($variant.Id)"
             Ensure-Workers @('w1', 'w2')
@@ -855,7 +857,7 @@ function T27 {
             $assembled = Log-Excerpt 'coordinator' 'assembled from chunks' 100 | Select-Object -Last 1
             $r = Get-ConversionRunners $out
             $exact = $outV -and $outV.Frames -eq $srcV.Frames
-            $ok = if ($variant.Fixed) { $code -eq 0 -and $exact -and ($verify -join ' ') -notmatch 'rejet' -and $r.LocalRuns -eq 0 } else { -not $exact }
+            $ok = if ($variant.Fixed) { $code -eq 0 -and $exact -and ($verify -join ' ') -notmatch 'rejet' -and $r.LocalRuns -eq 0 } else { $code -eq 0 -and $exact -and ($verify -join ' ') -match 'rejet.*images' -and (Prop (Encode-Summary $out) 'Status') -eq 'Failed' }
             $oText = if ($outV) { '{0} images, {1:0.000}s' -f $outV.Frames, $outV.Duration } else { 'absente' }
             Add-Result "T27$($variant.Id)" "Source 25 i/s, début lu à 21 ms d'écart : $($variant.Label)" $(if ($ok) { 'PASS' } else { 'FAIL' }) (
                 "source : $($srcV.Frames) images, {0:0.000}s | sortie : $oText | contrôle : « $verify » | workers : $($r.Workers -join ', '), tranches serveur : $($r.LocalRuns) | « $assembled » | code $code" -f $srcV.Duration)

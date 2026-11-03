@@ -535,6 +535,8 @@ public static partial class DiagnosticsAnalysis
     private static Verdict DecideAssembly(string error, string? check, IReadOnlyList<SliceMeasure> slices, SourceFingerprint? fingerprint,
         PacketStats? stats, StreamEnds? ends, bool chunksMeasured, bool complete)
     {
+        if (error.StartsWith(SliceShiftCheck.ErrorPrefix, StringComparison.Ordinal))
+            return new(VerdictClass.ShiftedFrames, "the check before assembly read a whole frame between where worker slices start and where the source has those frames (see Error): their frame counts and the total length can be right all the same. Nothing was assembled.");
         if (error.Contains("audio", StringComparison.OrdinalIgnoreCase))
             return new(VerdictClass.Audio, "the check rejected the audio tracks of the assembled file (see Error); the video was not at fault in this check.");
         if (!chunksMeasured)
