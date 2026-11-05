@@ -8,6 +8,15 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.42 — 2026-11-05
+
+Built and published by GitHub Actions (release v0.7.42). Worker unchanged (0.7.20).
+
+### Fixed
+
+- **Plugin** — The audio rule of 0.7.41 was wider than announced: any gap other than a packet in one window turned off the encoded grid's check for the whole file, a plain hole in the sound included. It now applies only to a packet read late then caught up: a gap of two packets, then two packets at the same time, in the same window. Any other irregularity keeps the grid's rule, and may reject the file.
+- **Plugin** — The library diagnostic still said an AVI's end is known to a few frames: since 0.7.41 frames are counted when the frame rate is the same.
+
 ## Plugin 0.7.41 — 2026-11-03
 
 Built and published by GitHub Actions (release v0.7.41). Worker unchanged (0.7.20).

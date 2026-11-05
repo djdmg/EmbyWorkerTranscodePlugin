@@ -132,7 +132,7 @@ public static class LibraryDiagnostic
             "Quand la commande d'Emby fixe la fréquence d'images (-r), ffmpeg comble le trou en répétant une image : aucun décalage mesuré sur un trou de 85 ms. Sans fréquence fixée, le résultat n'a pas été mesuré."),
         new(NoPresentationTimes, LevelWatch, "Paquets vidéo sans temps de présentation",
             "Des paquets vidéo n'indiquent pas quand les afficher (typiquement un AVI DivX/Xvid avec B-frames groupées). Deux lectures qui sautent dans le fichier ne retombent pas sur la même image.",
-            "Le fichier n'est pas découpé en tranches : il est converti d'un seul bloc, par une seule machine, donc sans le gain de plusieurs workers. Le contrôle final vérifie le début de la vidéo, mais la fin n'y est connue qu'à quelques images près (au moins 3)."),
+            "Le fichier n'est pas découpé en tranches : il est converti d'un seul bloc, par une seule machine, donc sans le gain de plusieurs workers. Le contrôle final compare le début de la vidéo et, à cadence égale, le nombre d'images ; à cadence différente, la fin n'y est connue qu'à quelques images près (au moins 3)."),
         new(VariableFrameRate, LevelWatch, "Cadence variable",
             "Les images ne sont pas régulièrement espacées dans les passages lus (vidéo enregistrée ou capturée à cadence variable, ou 3:2 stocké tel quel).",
             "Si le profil d'Emby impose une cadence (-r), la conversion répète ou saute des images pour la tenir, comme Emby seul. Le contrôle final calcule sa tolérance avec la cadence moyenne enregistrée. Ce cas n'a jamais été passé au banc de test du plugin : à vérifier sur le résultat."),

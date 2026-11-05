@@ -315,7 +315,7 @@ public class SyncCheckTests
         const double mp3Packet = 1152.0 / 44100;
         var video = Video(Grid(0, Frame25, Duration));
         // The source's packets, one of them a packet late every 30 s, the next one right behind it: 52 ms then 0, as measured on an AVI with MP3.
-        var jumping = Grid(0, mp3Packet, Duration).Select((t, k) => k > 0 && k % 1148 == 0 ? t + mp3Packet : t).OrderBy(t => t).ToList();
+        var jumping = Grid(0, mp3Packet, Duration).Select((t, k) => k % 1148 == 10 ? t + mp3Packet : t).OrderBy(t => t).ToList();
         var source = File(0, video, Audio(1, "mp3", jumping, mp3Packet, 0, 44100));
         var every30 = Grid(0, 30, Duration - 30).ToArray();
         // ffmpeg's packets, moved by 10 ms past 150 s.
@@ -326,6 +326,9 @@ public class SyncCheckTests
         // The same 10 ms without a jump in the source stays a shift.
         var steady = File(0, video, Audio(1, "mp3", Grid(0, mp3Packet, Duration), mp3Packet, 0, 44100));
         Assert.Contains("audio 1 décalé", SyncCheck.Verify(steady, 0, File(0, video, Audio(1, "aac", Moved(150, 0.010), AacPacket, 0, end: Duration + 0.010)), Encoded, every30));
+        // Nor does a plain hole of a packet in the source, late with nothing catching up: the grid is still judged.
+        var holed = File(0, video, Audio(1, "mp3", Grid(0, mp3Packet, Duration).Where((t, k) => k != 1158).ToList(), mp3Packet, 0, 44100));
+        Assert.Contains("audio 1 décalé", SyncCheck.Verify(holed, 0, File(0, video, Audio(1, "aac", Moved(150, 0.010), AacPacket, 0, end: Duration + 0.010)), Encoded, every30));
     }
 
     [Fact]

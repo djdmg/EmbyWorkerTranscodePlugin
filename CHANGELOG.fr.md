@@ -6,6 +6,15 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.42 — 05/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.42). Worker inchangé (0.7.20).
+
+### Corrigé
+
+- **Plugin** — La règle audio de la 0.7.41 était plus large qu'annoncé : tout écart différent d'un paquet dans une fenêtre coupait le contrôle de la grille encodée sur tout le fichier, y compris un simple trou dans le son. Elle ne s'applique plus qu'à un paquet lu en retard puis rattrapé : un écart de deux paquets, puis deux paquets au même temps, dans la même fenêtre. Toute autre irrégularité garde la règle de la grille et peut rejeter le fichier.
+- **Plugin** — Le diagnostic de la bibliothèque disait encore que la fin d'un AVI n'est connue qu'à quelques images près : depuis la 0.7.41, les images sont comptées quand la cadence est la même.
+
 ## Plugin 0.7.41 — 03/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.41). Worker inchangé (0.7.20).

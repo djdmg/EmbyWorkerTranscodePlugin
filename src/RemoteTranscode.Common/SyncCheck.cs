@@ -601,14 +601,22 @@ public static class SyncCheck
         return null;
     }
 
-    // Two packets in a row apart by a whole packet more or less than the stream's step.
+    // A packet read a packet late then caught up: two packets apart by twice the step, then, in the same window, two at the same time. Not a hole in the
+    // sound, which only has the first, nor any other irregularity: those keep the grid's rule.
     private static bool HasJump(IEnumerable<double> sorted, double step)
     {
         double? last = null;
+        bool late = false;
         foreach (double t in sorted)
         {
-            if (last is { } previous && Math.Abs(t - previous - step) > step / 2)
-                return true;
+            if (last is { } previous)
+            {
+                double gap = t - previous;
+                if (Math.Abs(gap - 2 * step) <= Tolerance)
+                    late = true;
+                else if (late && gap <= Tolerance)
+                    return true;
+            }
             last = t;
         }
         return false;
