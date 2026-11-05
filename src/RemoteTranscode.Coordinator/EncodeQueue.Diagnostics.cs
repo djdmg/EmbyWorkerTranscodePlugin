@@ -50,6 +50,7 @@ public sealed partial class EncodeQueue
                 AudioState = task.Audio,
                 AudioOffset = task.AudioOffset,
                 SeekMargin = task.Slices.FirstOrDefault()?.SeekMargin,
+                OutputFrame = task.OutputFrameTime(),
             };
         }
     }

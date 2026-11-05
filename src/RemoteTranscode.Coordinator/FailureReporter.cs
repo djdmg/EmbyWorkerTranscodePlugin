@@ -190,6 +190,14 @@ public static class FailureReportFormatter
         return text;
     }
 
+    /// <summary>
+    /// <see cref="ScrubLiterals"/> for the plugin's own tables and commands, which are made of numbers: a folder named with digits only took a chunk's
+    /// number out of a report, and could take the decimals of a time the same way. Such a folder's whole path is still removed, and free text
+    /// still goes through <see cref="Sanitize"/> with every literal.
+    /// </summary>
+    public static string ScrubGenerated(string text, IEnumerable<string> sensitive) =>
+        ScrubLiterals(text, sensitive.Where(v => !v.Trim().All(char.IsAsciiDigit)));
+
     // ffmpeg's dumps of a file's metadata: they hold titles, and no cause of a failure.
     private static readonly Regex MetadataLine = new(
         @"^\s*(?:Metadata:|Chapters?\b|Chapter #|Input #|Output #|Side data:|(?:title|comment|description|synopsis|album|album_artist|artist|composer|show|episode_id|episode_sort|season_number|network|genre|date|creation_time|encoder|handler_name|vendor_id|major_brand|minor_version|compatible_brands|filename|mimetype|language|publisher|copyright|performer|service_name|service_provider|BPS\S*|DURATION\S*|NUMBER_OF\S*|_STATISTICS\S*)\s*:)",
@@ -271,7 +279,7 @@ public static class FailureReportFormatter
     public static string Body(FailureReport report, string signature)
     {
         string Clean(string? text) => Sanitize(text, report.Sensitive);
-        string Scrub(string text) => ScrubLiterals(text, report.Sensitive);
+        string Scrub(string text) => ScrubGenerated(text, report.Sensitive);
         static string Fence(string text) => "```\n" + text.Replace("```", "'''") + "\n```\n";
         static string Capped(string text, int length) => text.Length <= length ? text : text[..length] + "...";
         var diagnostics = report.Diagnostics;

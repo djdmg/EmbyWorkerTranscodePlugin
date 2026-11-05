@@ -525,6 +525,32 @@ public class FailureDiagnosticsTests : IDisposable
     }
 
     [Fact]
+    public void UnderEmbysRateAVariableSourcesSliceIsComparedWithItsTicks()
+    {
+        // A real variable source at -r 25: 3019 frames for 3017 ticks and 3014 source frames, the slice ending 80 ms late.
+        const double tick = 0.04;
+        var slices = new List<DiagnosticSlice> { new(1, 0.08, 120.76, false, true, null, 1, 0, [new DiagnosticChunk(1, 0.08, 120.84, 120.76, 1)]) };
+        var chunks = new Dictionary<int, ChunkMeasure> { [1] = new(1, 3019, 1.48, 122.2, tick) };
+        var variable = new PacketStats(600, tick, 0.01, 0.16, false, 50, 50, 12, 0);
+        var sourceFrames = new Dictionary<int, int> { [1] = 3014 };
+        Assert.Equal(3017, DiagnosticsAnalysis.Slices(slices, chunks, null, variable, null, sourceFrames, tick)[0].Expected);
+        // Without -r the output follows the source: its frames are what to expect.
+        Assert.Equal(3014, DiagnosticsAnalysis.Slices(slices, chunks, null, variable, null, sourceFrames)[0].Expected);
+    }
+
+    [Fact]
+    public void GeneratedTextKeepsANumberAFolderIsCalledButNotItsPath()
+    {
+        string[] sensitive = ["/media/142", "/media/142/Mr Robot.mkv", "142", "Mr Robot"];
+        Assert.Equal("1 142 4260.08 3.142", FailureReportFormatter.ScrubGenerated("1 142 4260.08 3.142", sensitive));
+        string text = FailureReportFormatter.ScrubGenerated("-i /media/142/Mr Robot.mkv in /media/142 from Mr Robot", sensitive);
+        Assert.DoesNotContain("/media", text);
+        Assert.DoesNotContain("Mr Robot", text);
+        // Free text keeps every literal.
+        Assert.DoesNotContain("142", FailureReportFormatter.Sanitize("folder 142 unreadable", sensitive));
+    }
+
+    [Fact]
     public async Task AMissingChunkGivesNoFrameCountForItsSlice()
     {
         var (request, chunks) = Scenario(late: []);
