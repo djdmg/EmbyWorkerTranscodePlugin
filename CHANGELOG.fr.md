@@ -6,6 +6,14 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.43 — 05/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.43). Worker inchangé (0.7.20).
+
+### Corrigé
+
+- **Plugin** — La 0.7.42 rejetait de vrais fichiers AVI avec MP3 que la 0.7.41 acceptait : sa règle cherche deux paquets de son au même temps, et la lecture du fichier les fusionnait en un seul, si bien qu'elle ne s'appliquait jamais (0 fenêtre sur 188 sur un vrai fichier, 89 une fois corrigé). Un fichier rejeté est refait par Emby : rien de faux n'a été livré. Un paquet lu deux fois se distingue désormais de deux paquets au même temps par sa position dans le fichier ; quand la position n'est pas donnée, le temps seul décide et la grille encodée reste jugée.
+
 ## Plugin 0.7.42 — 05/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.42). Worker inchangé (0.7.20).

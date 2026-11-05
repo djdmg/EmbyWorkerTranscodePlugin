@@ -331,6 +331,49 @@ public class SyncCheckTests
         Assert.Contains("audio 1 décalé", SyncCheck.Verify(holed, 0, File(0, video, Audio(1, "aac", Moved(150, 0.010), AacPacket, 0, end: Duration + 0.010)), Encoded, every30));
     }
 
+    // The same source through the real reading: ffprobe's JSON, windows overlapping so that packets are printed twice, each packet with its place in the file.
+    private static Task<SyncVerdict> RunJumpingMp3(bool jumping, bool withPlaces)
+    {
+        const double mp3Packet = 1152.0 / 44100;
+        var sound = Grid(0, mp3Packet, Duration).Select((t, k) => (Time: jumping && k % 1148 == 10 ? t + mp3Packet : t, Place: 1000L + k * 700)).OrderBy(p => p.Time).ToList();
+        var encoded = Grid(-AacPriming, AacPacket, Duration).Select(t => t >= 150 ? t + 0.010 : t).ToList();
+        string Packet(int stream, double t, double length, long place) => FormattableString.Invariant(
+            $$"""{ "stream_index": {{stream}}, "pts_time": "{{t:0.000000}}", "dts_time": "{{t:0.000000}}", "duration_time": "{{length:0.000000}}"{{(withPlaces ? $", \"pos\": \"{place}\"" : "")}} }""");
+        string Json(bool source, bool packets)
+        {
+            var list = new List<string>();
+            if (packets)
+            {
+                list.AddRange(Grid(0, Frame25, Duration).Select((t, k) => Packet(0, t, Frame25, 5_000_000L + k)));
+                list.AddRange(source ? sound.Select(p => Packet(1, p.Time, mp3Packet, p.Place)) : encoded.Select((t, k) => Packet(1, t, AacPacket, 9_000_000L + k)));
+                // A window read a second time: the same packets, at the same places.
+                list.AddRange(source ? sound.Take(200).Select(p => Packet(1, p.Time, mp3Packet, p.Place)) : encoded.Take(200).Select((t, k) => Packet(1, t, AacPacket, 9_000_000L + k)));
+            }
+            string audio = source ? """{ "index": 1, "codec_type": "audio", "codec_name": "mp3", "sample_rate": "44100", "start_time": "0.000000" }"""
+                : """{ "index": 1, "codec_type": "audio", "codec_name": "aac", "sample_rate": "48000", "start_time": "0.000000" }""";
+            return FormattableString.Invariant($$"""
+                { "packets": [{{string.Join(",", list)}}],
+                  "streams": [ { "index": 0, "codec_type": "video", "codec_name": "h264", "r_frame_rate": "25/1", "avg_frame_rate": "25/1", "start_time": "0.000000", "height": 720 }, {{audio}} ],
+                  "format": { "format_name": "mov,mp4", "start_time": "0.000000", "duration": "{{Duration + 0.010}}" } }
+                """);
+        }
+        return SyncCheck.RunAsync(a => a.Any(x => x.StartsWith("frame=", StringComparison.Ordinal))
+                ? Task.FromResult("""{ "frames": [ { "best_effort_timestamp_time": "0.000000" } ], "format": { "start_time": "0.000000" } }""")
+                : Task.FromResult(Json(a[^1] == "s", a.Contains("-read_intervals") || a.Contains("-select_streams"))),
+            "s", "r", new SyncExpectation([1], ["aac"], null), Grid(30, 30, Duration - 30).ToList());
+    }
+
+    [Fact]
+    public async Task A_jumping_source_is_recognised_through_the_real_reading()
+    {
+        // Two packets at the same time, at two places in the file: not a packet read twice.
+        Assert.Null((await RunJumpingMp3(jumping: true, withPlaces: true)).Problem);
+        // A packet read twice looks the same by its time alone: it does not turn the grid's check off on a steady source.
+        Assert.Contains("audio 1 décalé", (await RunJumpingMp3(jumping: false, withPlaces: true)).Problem);
+        // Without places, what cannot be told apart counts once, and the grid is judged: fail closed.
+        Assert.Contains("audio 1 décalé", (await RunJumpingMp3(jumping: true, withPlaces: false)).Problem);
+    }
+
     [Fact]
     public void An_aac_may_end_a_packet_late_but_not_two()
     {

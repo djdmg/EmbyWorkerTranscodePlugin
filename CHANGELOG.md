@@ -8,6 +8,14 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.43 — 2026-11-05
+
+Built and published by GitHub Actions (release v0.7.43). Worker unchanged (0.7.20).
+
+### Fixed
+
+- **Plugin** — 0.7.42 rejected real AVI files with MP3 that 0.7.41 accepted: its rule looks for two sound packets at the same time, and the reading of the file merged them into one, so the rule never applied (0 windows of 188 on a real file, 89 once fixed). A rejected file is redone by Emby: nothing wrong was delivered. Packets read twice are now told apart from two packets at the same time by their place in the file; where the place is not given, the time alone decides, and the encoded grid is still judged.
+
 ## Plugin 0.7.42 — 2026-11-05
 
 Built and published by GitHub Actions (release v0.7.42). Worker unchanged (0.7.20).

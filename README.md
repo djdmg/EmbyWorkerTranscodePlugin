@@ -126,7 +126,7 @@ Versions are set in `src/RemoteTranscode.EmbyPlugin/RemoteTranscode.EmbyPlugin.c
 
 | Item | Version |
 |---|---|
-| Plugin | 0.7.42 |
+| Plugin | 0.7.43 |
 | Worker and installer | 0.7.20, with icon, GPU decoding and GPU tone mapping (needs Resizable BAR on NVIDIA and AMD cards), logs kept 7 days (FFmpeg "full" build: installer of about 218 MB instead of 170 MB), automatic update |
 | Minimum worker | 0.7.19 for conversions: an older worker, or one with an unknown version, gets no slice and still runs playbacks. The refusal shows in the status API, on the plugin and monitoring pages and in the log. |
 | Emby Server tested | 4.10.2.0 (Synology DS1522+, DSM 7.4.1, AMD Ryzen R1600 without GPU); Emby's ffmpeg 5.1 (fork) |

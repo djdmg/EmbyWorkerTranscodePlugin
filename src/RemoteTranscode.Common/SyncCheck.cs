@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace RemoteTranscode.Common;
 
 /// <summary>A packet's times as ffprobe lists them, in the file's own time. Pts is null when it gives none (AVI with packed B-frames).</summary>
-public readonly record struct ProbedPacket(double? Pts, double? Dts, double? Duration)
+public readonly record struct ProbedPacket(double? Pts, double? Dts, double? Duration, double? Place = null)
 {
     public double? Time => Pts ?? Dts;
 }
@@ -35,19 +35,23 @@ public sealed record MediaProbe(double? FileStart, double? Duration, string? For
     /// ffprobe 9 sometimes prints no packet at all, without error, for an open-ended one.
     /// </summary>
     public static string[] PacketArgs(string path, string intervals) =>
-        ["-v", "error", "-read_intervals", intervals, "-show_entries", Entries + ":packet=stream_index,pts_time,dts_time,duration_time", "-print_format", "json", path];
+        ["-v", "error", "-read_intervals", intervals, "-show_entries", Entries + ":packet=stream_index,pts_time,dts_time,duration_time,pos", "-print_format", "json", path];
 
     public ProbedStream? Video => Streams.FirstOrDefault(s => s.IsVideo);
 
     public IReadOnlyList<ProbedStream> Audio => Streams.Where(s => s.IsAudio).ToList();
 
-    /// <summary>The packets of another reading of the same file added to these: windows may overlap, and a packet read twice counts once, by its time (Matroska gives no decoding time right after a seek).</summary>
+    /// <summary>
+    /// The packets of another reading of the same file added to these: windows may overlap, and a packet read twice counts once, by its time (Matroska gives no
+    /// decoding time right after a seek). Two sound packets at the same time from two places in the file are two packets (AVI with MP3: 387 in 188 windows,
+    /// measured): the audio check needs them. Where the place is not given, the time alone decides.
+    /// </summary>
     public MediaProbe Merge(MediaProbe other) => this with
     {
         Streams = Streams.Select(s => s with
         {
             Packets = s.Packets.Concat(other.Streams.FirstOrDefault(o => o.Index == s.Index)?.Packets ?? [])
-                .DistinctBy(p => p.Time).ToList(),
+                .DistinctBy(p => (p.Time, s.IsAudio ? p.Place : null)).ToList(),
         }).ToList(),
     };
 
@@ -74,7 +78,7 @@ public sealed record MediaProbe(double? FileStart, double? Duration, string? For
                 int index = p.TryGetProperty("stream_index", out var si) && si.ValueKind == JsonValueKind.Number ? si.GetInt32() : -1;
                 if (!packets.TryGetValue(index, out var own))
                     packets[index] = own = [];
-                own.Add(new ProbedPacket(Number(p, "pts_time"), Number(p, "dts_time"), Number(p, "duration_time")));
+                own.Add(new ProbedPacket(Number(p, "pts_time"), Number(p, "dts_time"), Number(p, "duration_time"), Number(p, "pos")));
             }
         var streams = new List<ProbedStream>();
         int? height = null;
@@ -321,7 +325,7 @@ public static class SyncCheck
 
     /// <summary>All the packets of one stream, for a stream ending further from the end than that: a whole read, rare and long, of that stream only.</summary>
     public static string[] WholeStreamArgs(string path, int stream) =>
-        ["-v", "error", "-select_streams", stream.ToString(CultureInfo.InvariantCulture), "-show_entries", "packet=stream_index,pts_time,dts_time,duration_time", "-print_format", "json", path];
+        ["-v", "error", "-select_streams", stream.ToString(CultureInfo.InvariantCulture), "-show_entries", "packet=stream_index,pts_time,dts_time,duration_time,pos", "-print_format", "json", path];
 
     /// <summary>
     /// The whole check, with ffprobe behind <paramref name="probe"/> (standard output of a run; it throws when the run failed). Null when the
