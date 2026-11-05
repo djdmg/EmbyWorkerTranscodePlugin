@@ -161,6 +161,43 @@ public sealed partial class EncodeQueue
         });
     }
 
+    /// <summary>The frames of each slice but the last, with the fps filter, against the grid (<see cref="SliceShiftCheck.GridFramesProblem"/>). Reads the whole video in the spool.</summary>
+    private async Task<string?> GridFramesProblemAsync(EncodeTask task)
+    {
+        List<(int Slice, List<string> Paths, int Expected)> slices;
+        lock (gate)
+        {
+            if (!task.FrameRateFiltered || task.OutputFrameTime() is not { } frame)
+                return null;
+            slices = task.Slices.Where(s => !s.Last).OrderBy(s => s.Index).Select(s => (s.Index + 1,
+                task.Chunks.Where(c => c.Index >= s.FirstChunk && c.Index < s.FirstChunk + task.ContiguousChunks(s)).OrderBy(c => c.Index).Select(c => ChunkPath(task.Id, c.Index)).ToList(),
+                (int)Math.Round((EncodeTask.OnGrid(s.End, frame) - EncodeTask.OnGrid(s.Start, frame)) / frame))).ToList();
+        }
+        return await Task.Run(() =>
+        {
+            var counted = new List<(int, int, int)>();
+            foreach (var (slice, paths, expected) in slices)
+            {
+                int frames = 0;
+                try
+                {
+                    foreach (string path in paths)
+                    {
+                        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan);
+                        frames += SliceShiftCheck.CountFrames(file);
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    logger.LogWarning("Conversion {Id}: chunks of slice {Slice} not read ({Error})", task.Id, slice, ex.GetType().Name);
+                    frames = 0;
+                }
+                counted.Add((slice, frames, expected));
+            }
+            return SliceShiftCheck.GridFramesProblem(counted);
+        });
+    }
+
     /// <summary>
     /// A conversion refused before its assembly goes the way of one refused after it: failure report and spool kept
     /// (<see cref="OnConversionDone"/>), and Emby's original command on the server, which the shim runs on this message.

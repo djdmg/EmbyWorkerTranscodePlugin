@@ -147,6 +147,12 @@ public sealed class CoordinatorOptions
     public string? IssueReportFile { get; set; }
 
     /// <summary>
+    /// A source with irregular frames and Emby's -r: Emby's rate is also done by the fps filter in the slices (EmbyConversionPlanner.WithFrameRateFilter).
+    /// Off: those files go on being rejected by the check when their slices come out too long, and Emby converts them again (the bench's way to show it).
+    /// </summary>
+    public bool EncodeFrameRateFilter { get; set; } = true;
+
+    /// <summary>
     /// Forces how far below a frame's time the runs set -ss and -t, in seconds, instead of half a frame
     /// (EmbyConversionPlanner.SeekMargin). For the bench, which provokes a rejection with 0.001. Null in production.
     /// </summary>

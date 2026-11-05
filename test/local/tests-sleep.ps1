@@ -983,6 +983,93 @@ function T30 {
     }
 }
 
+# Source à cadence variable avec le -r d'Emby (issue #6). Images de 10 à 160 ms (vérifié à ffprobe avant le test), chacune portant son
+# numéro sous forme de 16 cases noires ou blanches : on peut dire quelle image de la source montre chaque image de la sortie.
+# T31a : sans le filtre fps, le contrôle rejette ; T31b : le rythme de l'issue ; T31c : images irrégulières au hasard ; T31d : un worker arrêté en cours.
+#   pwsh -File run-tests.ps1 -Only T31
+function New-T31Source([string]$name, [string]$kind) {
+    $dst = Join-Path $Paths.Media $name
+    if (Test-Path $dst) { return $dst }
+    $boxes = (0..15 | ForEach-Object { "drawbox=x=$($_ * 40):y=0:w=40:h=40:c=white:t=fill:enable='mod(floor(n/$([math]::Pow(2, $_))),2)'" }) -join ','
+    $expr = if ($kind -eq 'random') {
+        "if(eq(N,0),st(0,0),st(0,ld(0)+st(1,random(2))*0+if(lt(ld(1),0.10),3,if(lt(ld(1),0.14),4,if(lt(ld(1),0.56),6,if(lt(ld(1),0.86),12,if(lt(ld(1),0.965),24,48)))))))"
+    } else {
+        "if(eq(N,0),st(0,0),st(0,ld(0)+if(lt(st(1,random(2)),0.003),3,if(lt(ld(1),0.006),48,if(lt(mod(N,6),2),24,6)))))"
+    }
+    & $Paths.WorkerFfmpeg -y -hide_banner -v error -f lavfi -i 'testsrc2=size=640x360:rate=25' -f lavfi -i 'sine=frequency=440:sample_rate=48000' `
+        -filter_complex "[0:v]drawbox=x=0:y=0:w=640:h=40:c=black:t=fill,$boxes,settb=1/300,setpts='$expr'[v]" -map '[v]' -map 1:a -frames:v 10500 -t 420 `
+        -fps_mode passthrough -enc_time_base 1/90000 -c:v libx264 -preset ultrafast -g 50 -keyint_min 50 -sc_threshold 0 -bf 2 -pix_fmt yuv420p -profile:v high -crf 20 -threads 4 `
+        -c:a aac -video_track_timescale 90000 $dst
+    if ($LASTEXITCODE) { throw "génération de $name en échec" }
+    $dst
+}
+
+# Les écarts entre images d'une source, pour vérifier qu'elle est bien à cadence variable.
+function Get-T31Gaps([string]$file) {
+    $t = @(& $Paths.ServerFfprobe -v error -select_streams v:0 -show_entries packet=pts_time -of csv=p=0 $file) | ForEach-Object { "$_".Split(',')[0] } | Where-Object { $_ -and $_ -ne 'N/A' } |
+        ForEach-Object { [double]::Parse($_, [cultureinfo]::InvariantCulture) } | Sort-Object
+    $m = 0..($t.Count - 2) | ForEach-Object { $t[$_ + 1] - $t[$_] } | Measure-Object -Minimum -Maximum
+    [pscustomobject]@{ Min = $m.Minimum; Max = $m.Maximum; Last = $t[-1] }
+}
+
+function T31 { T31a; T31bcd }
+
+function T31a {
+    $pattern = New-T31Source 't31_pattern.mp4' 'pattern'
+    $random = New-T31Source 't31_random.mp4' 'random'
+    foreach ($src in @($pattern, $random)) {
+        $g = Get-T31Gaps $src
+        if ($g.Min -gt 0.011 -or $g.Max -lt 0.159) { throw "$src n'a pas des images de 10 à 160 ms : $($g.Min) à $($g.Max)" }
+    }
+    $mp4 = 'mov,mp4,m4a,3gp,3g2,mj2'
+    Restart-BenchCoordinator @{ EncodeFrameRateFilter = $false } 'coordinator-before-t31a'
+    try {
+        Ensure-Workers @('w1', 'w2')
+        $out = Join-Path $Paths.Out 'conv-t31a.mp4'
+        $s = Start-Shim (New-ConversionArgs -InputPath $pattern -OutputPath $out -InputFormat $mp4 -Rate '25' -Width 640 -Height 360) 't31a'
+        $code = Wait-Exit $s 1800
+        $verify = Log-Excerpt 'shim-t31a' 'rejet' 2
+        Add-Result 'T31a' 'Cadence variable sans le filtre fps : rejeté, comme dans l''issue #6' $(if ($code -eq 0 -and ($verify -join ' ') -match 'rejet') { 'PASS' } else { 'FAIL' }) "contrôle : « $verify » | final : $(Prop (Encode-Summary $out) 'Status') | code $code"
+    } finally { Restart-BenchCoordinator @{} 'coordinator-t31a' }
+}
+
+function T31bcd {
+    $pattern = New-T31Source 't31_pattern.mp4' 'pattern'
+    $random = New-T31Source 't31_random.mp4' 'random'
+    # La vidéo seule retardée de 30 ms : l'audio commence toujours à 0.
+    $offGrid = Join-Path $Paths.Media 't31_offgrid.mp4'
+    if (-not (Test-Path $offGrid)) { & $Paths.WorkerFfmpeg -y -hide_banner -v error -itsoffset 0.03 -i $pattern -i $pattern -map 0:v -map 1:a -c copy -video_track_timescale 90000 $offGrid }
+    $mp4 = 'mov,mp4,m4a,3gp,3g2,mj2'
+    foreach ($c in @(@{ Id = 'b'; Src = $pattern; Label = 'rythme de l''issue' }, @{ Id = 'c'; Src = $random; Label = 'irrégulière au hasard' }, @{ Id = 'd'; Src = $pattern; Label = 'worker arrêté en cours'; Stop = $true }, @{ Id = 'e'; Src = $offGrid; Label = 'première image hors de la grille (30 ms) : sans le filtre, le contrôle tranche'; OffGrid = $true })) {
+        Ensure-Workers @('w1', 'w2')
+        $name = "t31$($c.Id)"
+        $out = Join-Path $Paths.Out "conv-$name.mp4"
+        $s = Start-Shim (New-ConversionArgs -InputPath $c.Src -OutputPath $out -InputFormat $mp4 -Rate '25' -Width 640 -Height 360) $name
+        $stopped = $false
+        if ($c['Stop']) {
+            $until = (Get-Date).AddSeconds(120)
+            while (-not $s.HasExited -and (Get-Date) -lt $until) {
+                $e = Encode-Summary $out
+                if ($e -and @($e.runs | Where-Object worker -eq 'w1').Count) { Start-Sleep -Seconds 4; Stop-Worker 'w1'; $stopped = $true; break }
+                Start-Sleep -Milliseconds 300
+            }
+        }
+        $code = Wait-Exit $s 1800
+        $verify = Log-Excerpt "shim-$name" 'source .*sultat|rejet|invérifiable' 3
+        $filtered = @(Log-Excerpt 'coordinator' 'irregular source frames' 20).Count
+        $gaps = Get-T31Gaps $c.Src
+        $v = if (Test-Path $out) { Measure-Video $out } else { $null }
+        $e = Encode-Summary $out; $wait = (Get-Date).AddSeconds(10)
+        while ((Prop $e 'Status') -eq 'Assembling' -and (Get-Date) -lt $wait) { Start-Sleep -Milliseconds 300; $e = Encode-Summary $out }
+        $expected = [math]::Floor(($gaps.Last + 0.04) / 0.04 + 0.5 + 1e-6)
+        # Hors de la grille, les deux issues sont justes tant que le contrôle tranche : on regarde le fichier à part.
+        $ok = $code -eq 0 -and $filtered -ge 1 -and ($c['OffGrid'] -or ($verify -join ' ') -notmatch 'rejet|invérifiable') -and ($c['OffGrid'] -or (($verify -join ' ') -match 'source' -and (Prop $e 'Status') -eq 'Completed' -and $v -and [math]::Abs($v.Frames - $expected) -le 1)) -and (-not $c['Stop'] -or $stopped)
+        $r = Get-ConversionRunners $out
+        Add-Result "T31$($c.Id)" "Cadence variable, $($c.Label) : conversion par tranches, pas de rejet" $(if ($ok) { 'PASS' } else { 'FAIL' }) (
+            "images $($v.Frames), attendues $expected, longueur {0:0.000} s | contrôle : « $verify » | workers : $($r.Workers -join ', '), tranches serveur : $($r.LocalRuns), w1 arrêté : $stopped | final : $(Prop $e 'Status') | code $code" -f $v.Duration)
+    }
+}
+
 function T28 {
     Restart-BenchCoordinator @{ EncodeAudioAhead = $true } 'coordinator-before-t28'
     try { T28Core } finally { Restart-BenchCoordinator @{} 'coordinator-t28' }

@@ -580,6 +580,44 @@ public static class EmbyConversionPlanner
     }
 
     /// <summary>
+    /// The chunk command with Emby's -r also done by the fps filter, for a source whose frames are irregular; null when the command sets no
+    /// rate or its graph's end cannot be told. With -r alone, ffmpeg only repeats or drops a frame once it is over 1.1 frames off, so how many
+    /// frames a run gives depends on the frames it has seen since its start: runs meeting at one frame of a source with frames of 10 to 160 ms
+    /// gave 2 frames more or fewer than their length, those frames added up over the file and the video came out 10 frames too long (issue #6).
+    /// The filter picks each frame from its own time, whatever came before: measured with ffmpeg 9.0.2 and 5.1.2 on such a source, slices cut
+    /// anywhere hold, frame for frame, what one run holds, and a source frame first shows at most half an output frame from its time, where -r
+    /// alone is up to 40 ms early and 110 ms late even in one run. -r stays: the frames reach it regular, and the check reads the rate from it.
+    /// </summary>
+    public static string[]? WithFrameRateFilter(IReadOnlyList<string> template)
+    {
+        var args = template.ToList();
+        int rate = args.FindIndex(a => a == "-r" || a.StartsWith("-r:", StringComparison.Ordinal));
+        if (rate < 0 || rate + 1 >= args.Count || OutputFrameTime(args) is null)
+            return null;
+        string fps = "fps=fps=" + args[rate + 1];
+        int complex = args.IndexOf("-filter_complex");
+        if (complex >= 0)
+        {
+            int map = args.IndexOf("-map");
+            if (complex + 1 >= args.Count || map < 0 || map + 1 >= args.Count || !args[map + 1].StartsWith('[') || !args[complex + 1].EndsWith(args[map + 1], StringComparison.Ordinal))
+                return null;
+            string graph = args[complex + 1];
+            args[complex + 1] = graph[..^args[map + 1].Length] + "," + fps + args[map + 1];
+            return args.ToArray();
+        }
+        int simple = args.FindIndex(a => a is "-vf" or "-filter:v" || a.StartsWith("-filter:v:", StringComparison.Ordinal));
+        if (simple >= 0)
+        {
+            if (simple + 1 >= args.Count)
+                return null;
+            args[simple + 1] += "," + fps;
+            return args.ToArray();
+        }
+        args.InsertRange(rate, ["-vf", fps]);
+        return args.ToArray();
+    }
+
+    /// <summary>
     /// The source streams an assembly maps, in order, without the chunks' video. Null when a map is written another way
     /// than "0:N" (the streams it means are then not known here).
     /// </summary>
