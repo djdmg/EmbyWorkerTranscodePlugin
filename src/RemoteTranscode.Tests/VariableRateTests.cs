@@ -156,6 +156,37 @@ public class VariableRateTests
     }
 
     [Fact]
+    public void The_last_slice_holds_the_last_frame_and_stops_after_its_place_on_the_grid()
+    {
+        // The real file: frames of 20 ms, the last at 3077.82 s lasting 100 ms. Its place on the grid is 3077.84 s: kept, 3077.88 s is not.
+        Assert.Equal(3077.86, EmbyConversionPlanner.LastSliceEnd(3077.82, Tick), 6);
+        Assert.Equal(3077.86, EmbyConversionPlanner.LastSliceEnd(3077.84, Tick), 6);
+        Assert.Equal(3077.82, EmbyConversionPlanner.LastSliceEnd(3077.80, Tick), 6);
+        var last = EmbyConversionPlanner.WithFrameRateFilter(
+            ["-i", "{input:0}", "-map", "[f1_out0]", "-filter_complex", "[0:0]scale@f1=width=720:height=404[f1_out0]", "-r:v:0", "25", "-f", "segment", "-segment_list", "{list}", "{out}"], 3077.86)!;
+        Assert.Equal("[0:0]scale@f1=width=720:height=404,tpad=stop_mode=clone:stop_duration=5,fps=fps=25,trim=end=3077.86[f1_out0]", last[5]);
+        // Workers 0.7.20 accept it as it is.
+        Assert.True(ArgTemplateValidator.Validate(last, out string? error), error);
+    }
+
+    [Fact]
+    public void Only_the_last_slice_runs_the_last_slice_s_command()
+    {
+        var first = new EncodeSlice { Index = 0, Start = 0, End = 120 };
+        var end = new EncodeSlice { Index = 1, Start = 120, End = 300, Last = true };
+        var task = new EncodeTask
+        {
+            Id = "t", Input = "/in.mp4", Output = "/out.mp4", ChunkTemplate = ["-i", "x", "-r:v:0", "25"], FrameRateFiltered = true, LastChunkTemplate = ["last"],
+            Requirements = new JobRequirements("libx264", []), Source = new SourceInfo(300, 640, 360, null, 1, 0), Slices = [first, end],
+        };
+        Assert.Same(task.ChunkTemplate, task.ChunkTemplateFor(first));
+        Assert.Equal(["last"], task.ChunkTemplateFor(end));
+        // Without a command of its own, the last slice runs the common one.
+        var plain = TaskOf(end);
+        Assert.Same(plain.ChunkTemplate, plain.ChunkTemplateFor(end));
+    }
+
+    [Fact]
     public void A_slice_frames_short_is_not_hidden_by_the_grid()
     {
         var slice = new EncodeSlice { Index = 2, Start = 220.03, End = 390.02 };

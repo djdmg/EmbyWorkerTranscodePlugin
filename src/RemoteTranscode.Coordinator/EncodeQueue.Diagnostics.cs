@@ -69,6 +69,8 @@ public sealed partial class EncodeQueue
                     slice.Last ? null : slice.End, slice.End - slice.Start, slice.SeekMargin), task.Requirements.ToneMapping);
                 commands.Add(new DiagnosticCommand($"Run of slice {slice.Index + 1} (worker and server; the server lists chunks as CSV)", run));
             }
+            if (task.LastChunkTemplate is { } last)
+                commands.Add(new DiagnosticCommand("Chunk template of the last slice (fps filter, last frame held and cut)", last));
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IndexOutOfRangeException)
         {

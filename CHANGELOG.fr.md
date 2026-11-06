@@ -6,6 +6,14 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.45 — 06/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.45). Worker inchangé (0.7.20) : les filtres ajoutés sont déjà autorisés.
+
+### Corrigé
+
+- **Plugin** — Issues #6 et #9 : la 0.7.44 rejetait encore le vrai fichier de l'issue #6, deux images trop court à la fin. Sa dernière image dure 100 ms après des images de 20 ms, et sa place sur la grille de sortie tombe après son propre temps : le filtre fps de ffmpeg 9.0.2 (workers) s'arrête au temps de la dernière image et la perdait, là où le 5.1 d'Emby la tenait. Rien de faux n'a été livré : Emby a refait la conversion. La dernière tranche tient désormais la dernière image (`tpad`) et coupe la vidéo (`trim`) une demi-image après la place de cette image sur la grille : les mêmes 748 images avec 9.0.2 et 5.1 sur la fin de ce fichier, la dernière étant celle de la source, comme l'exige le contrôle. Si la dernière image de la source n'a pas pu être lue, la conversion se fait sans le filtre, comme avant la 0.7.44. Une dernière image bien plus longue (au-delà d'environ deux images de sortie) ne peut satisfaire les deux règles de fin du contrôle et reste rejetée. Banc : T31f, dernière image de 100 ms avant sa place sur la grille, 10499 images sur 10499, aucun rejet.
+
 ## Plugin 0.7.44 — 06/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.44). Worker inchangé (0.7.20).

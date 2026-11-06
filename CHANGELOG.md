@@ -8,6 +8,14 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.45 — 2026-11-06
+
+Built and published by GitHub Actions (release v0.7.45). Worker unchanged (0.7.20): the filters added are already allowed.
+
+### Fixed
+
+- **Plugin** — Issues #6 and #9: 0.7.44 still rejected the real file of issue #6, two frames short at its end. Its last frame lasts 100 ms after frames of 20 ms, and its place on the output's grid comes after its own time: the fps filter of ffmpeg 9.0.2 (workers) stops at the last frame's time and dropped it, where Emby's 5.1 held it. Nothing wrong was delivered: Emby converted the file again. The last slice now holds the last frame (`tpad`) and cuts the video (`trim`) halfway after that frame's place on the grid: the same 748 frames with 9.0.2 and 5.1 on that file's end, its last frame the source's, as the check requires. When the source's last frame cannot be read, the conversion goes without the filter, as before 0.7.44. A last frame lasting much longer (over about two output frames) cannot meet both of the check's end rules and is still rejected. Bench: T31f, a last frame of 100 ms before its place on the grid, 10499 frames of 10499, no rejection.
+
 ## Plugin 0.7.44 — 2026-11-06
 
 Built and published by GitHub Actions (release v0.7.44). Worker unchanged (0.7.20).

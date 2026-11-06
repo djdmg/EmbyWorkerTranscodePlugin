@@ -579,6 +579,17 @@ public static class EmbyConversionPlanner
         return null;
     }
 
+    /// <summary>Seconds the last frame is held before the filter picks frames: more than any frame of a source cut into slices lasts.</summary>
+    public const double LastFrameHold = 5;
+
+    /// <summary>
+    /// Where the last slice's video stops, with the fps filter: halfway after the output frame where the source's last frame lies on the grid
+    /// (rounded half up, as the filter does), so that frame is kept and the next one, a copy of it, is not. Its last frame is then the source's
+    /// last one, as the check requires, and the video ends within a frame and a half of the source's (its other rule) when that frame lasts up to
+    /// about two output frames (100 ms at 25 fps, the real file). A longer last frame cannot meet both rules: the check rejects it, Emby converts it.
+    /// </summary>
+    public static double LastSliceEnd(double lastFrame, double frame) => (Math.Floor(lastFrame / frame + 0.5 + 1e-6) + 0.5) * frame;
+
     /// <summary>
     /// The chunk command with Emby's -r also done by the fps filter, for a source whose frames are irregular; null when the command sets no
     /// rate or its graph's end cannot be told. With -r alone, ffmpeg only repeats or drops a frame once it is over 1.1 frames off, so how many
@@ -587,14 +598,22 @@ public static class EmbyConversionPlanner
     /// The filter picks each frame from its own time, whatever came before: measured with ffmpeg 9.0.2 and 5.1.2 on such a source, slices cut
     /// anywhere hold, frame for frame, what one run holds, and a source frame first shows at most half an output frame from its time, where -r
     /// alone is up to 40 ms early and 110 ms late even in one run. -r stays: the frames reach it regular, and the check reads the rate from it.
+    /// <para>
+    /// <paramref name="end"/>, for the last slice: where its video must stop (see <see cref="LastSliceEnd"/>). At the end of the stream the filter of
+    /// ffmpeg 9.0.2 stops at the last frame's own time, not at its end: a last frame of 100 ms after frames of 20 ms, whose place on the grid is after
+    /// its time, was dropped (2 frames short, real file), where Emby's 5.1 held it to its end. So the last frame is held (tpad) and the video cut
+    /// (trim) at a time both builds agree on, measured the same with 9.0.2 and 5.1 on that file.
+    /// </para>
     /// </summary>
-    public static string[]? WithFrameRateFilter(IReadOnlyList<string> template)
+    public static string[]? WithFrameRateFilter(IReadOnlyList<string> template, double? end = null)
     {
         var args = template.ToList();
         int rate = args.FindIndex(a => a == "-r" || a.StartsWith("-r:", StringComparison.Ordinal));
         if (rate < 0 || rate + 1 >= args.Count || OutputFrameTime(args) is null)
             return null;
         string fps = "fps=fps=" + args[rate + 1];
+        if (end is { } e)
+            fps = $"tpad=stop_mode=clone:stop_duration={LastFrameHold.ToString(CultureInfo.InvariantCulture)},{fps},trim=end={Time(e)}";
         int complex = args.IndexOf("-filter_complex");
         if (complex >= 0)
         {

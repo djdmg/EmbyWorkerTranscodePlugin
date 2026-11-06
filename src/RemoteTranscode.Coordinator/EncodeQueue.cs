@@ -148,6 +148,15 @@ public sealed class EncodeTask
     /// </summary>
     public bool FrameRateFiltered { get; init; }
 
+    /// <summary>
+    /// The last slice's command with the fps filter: it also holds the source's last frame and cuts the video where that frame lies on the grid
+    /// (EmbyConversionPlanner.LastSliceEnd). Set with <see cref="FrameRateFiltered"/>, which is not set without it.
+    /// </summary>
+    public string[]? LastChunkTemplate { get; init; }
+
+    /// <summary>The command the runs of a slice use.</summary>
+    public string[] ChunkTemplateFor(EncodeSlice slice) => slice.Last && LastChunkTemplate is { } last ? last : ChunkTemplate;
+
     /// <summary>The time on the output's grid where a source time falls, rounded as the fps filter does, half up. The small term absorbs times printed to the microsecond.</summary>
     public static double OnGrid(double time, double frame) => Math.Floor(time / frame + 0.5 + 1e-6) * frame;
 
@@ -688,6 +697,24 @@ public sealed partial class EncodeQueue : IJobOwner
         // on that frame, so all of it would lie off the grid. Not filtered, the check still judges the file: Emby converts it again if it must.
         string[]? filtered = options.EncodeFrameRateFilter && variableRate && slices.Count > 1 && EncodeTask.FirstFrameOnGrid(slices[0].Start, plan.ChunkTemplate)
             ? EmbyConversionPlanner.WithFrameRateFilter(plan.ChunkTemplate) : null;
+        // The last slice needs the source's last frame (EmbyConversionPlanner.LastSliceEnd); without it, no filter at all.
+        string[]? lastFiltered = null;
+        if (filtered != null && EmbyConversionPlanner.OutputFrameTime(plan.ChunkTemplate) is { } outputFrame)
+        {
+            double? lastFrame = null;
+            try
+            {
+                lastFrame = await media.LastFrameAsync(plan.Input, source.DurationSeconds, token);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning("Last frame of {Input} unreadable ({Error})", plan.Input, ex.Message);
+            }
+            if (lastFrame is { } last)
+                lastFiltered = EmbyConversionPlanner.WithFrameRateFilter(plan.ChunkTemplate, EmbyConversionPlanner.LastSliceEnd(last, outputFrame));
+        }
+        if (lastFiltered is null)
+            filtered = null;
         var task = new EncodeTask
         {
             Id = Guid.NewGuid().ToString("N")[..12],
@@ -695,6 +722,7 @@ public sealed partial class EncodeQueue : IJobOwner
             Output = plan.Output,
             ChunkTemplate = filtered ?? plan.ChunkTemplate,
             FrameRateFiltered = filtered != null,
+            LastChunkTemplate = filtered != null ? lastFiltered : null,
             // HDR → SDR: on the GPU (libplacebo) when a connected worker validated it, and then only such workers take
             // its slices (never the server, whose ffmpeg has no libplacebo); otherwise zscale everywhere. Never both in
             // one file: the renderings differ slightly. Provisional until the first run starts (DecideToneMapping):
@@ -1373,7 +1401,7 @@ public sealed partial class EncodeQueue : IJobOwner
         double? end = slice.Last ? task.Source?.DurationSeconds : slice.End;
         // Filters translated here (EmbyFilters.TranslateArgs) with the conversion's tone mapper: the same graph for every
         // slice, whoever encodes it.
-        string[] template = EmbyFilters.TranslateArgs(EmbyConversionPlanner.ChunkArgs(task.ChunkTemplate, startIndex, startSeconds, seek,
+        string[] template = EmbyFilters.TranslateArgs(EmbyConversionPlanner.ChunkArgs(task.ChunkTemplateFor(slice), startIndex, startSeconds, seek,
             slice.Last ? null : slice.End, end - startSeconds, slice.SeekMargin), task.Requirements.ToneMapping);
         var file = new PlannedFile(0, JobFileKind.Input, task.Input, Path.GetFileName(task.Input), inputSize);
         return new JobPlan(true, "conversion", template, [file], EmbyConversionPlanner.ChunkSeconds, startIndex,

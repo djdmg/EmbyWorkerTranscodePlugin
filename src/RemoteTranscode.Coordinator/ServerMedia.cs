@@ -225,6 +225,13 @@ public sealed class ServerMedia(CoordinatorOptions options)
     public async Task<double?> NearestFrameAsync(string path, double time, CancellationToken token) =>
         await FramesAroundAsync(path, [time], token) is { } frames ? NearestFrame(frames.Select(f => f.Time).ToList(), time) : null;
 
+    /// <summary>
+    /// The time of the video's last frame, counted like the boundaries; null when no frame was read in the last seconds of the file (a video
+    /// ending more than 5 s before the file's <paramref name="duration"/>, or unreadable).
+    /// </summary>
+    public async Task<double?> LastFrameAsync(string path, double duration, CancellationToken token) =>
+        await FramesAroundAsync(path, [duration], token) is { Count: > 0 } frames ? frames[^1].Time : null;
+
     /// <summary>The time nearest to <paramref name="time"/> in a sorted list, null when the list is empty.</summary>
     public static double? NearestFrame(List<double> sortedTimes, double time)
     {

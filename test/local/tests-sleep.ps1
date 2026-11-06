@@ -985,9 +985,10 @@ function T30 {
 
 # Source à cadence variable avec le -r d'Emby (issue #6). Images de 10 à 160 ms (vérifié à ffprobe avant le test), chacune portant son
 # numéro sous forme de 16 cases noires ou blanches : on peut dire quelle image de la source montre chaque image de la sortie.
-# T31a : sans le filtre fps, le contrôle rejette ; T31b : le rythme de l'issue ; T31c : images irrégulières au hasard ; T31d : un worker arrêté en cours.
+# T31a : sans le filtre fps, le contrôle rejette ; T31b : le rythme de l'issue ; T31c : images irrégulières au hasard ; T31d : un worker arrêté en cours ;
+# T31f : dernière image de 100 ms, avant sa place sur la grille (le filtre de ffmpeg 9.0.2 la perdait : 2 images de moins sur un vrai fichier).
 #   pwsh -File run-tests.ps1 -Only T31
-function New-T31Source([string]$name, [string]$kind) {
+function New-T31Source([string]$name, [string]$kind, [int]$frames = 10500, [string[]]$extra = @()) {
     $dst = Join-Path $Paths.Media $name
     if (Test-Path $dst) { return $dst }
     $boxes = (0..15 | ForEach-Object { "drawbox=x=$($_ * 40):y=0:w=40:h=40:c=white:t=fill:enable='mod(floor(n/$([math]::Pow(2, $_))),2)'" }) -join ','
@@ -997,9 +998,9 @@ function New-T31Source([string]$name, [string]$kind) {
         "if(eq(N,0),st(0,0),st(0,ld(0)+if(lt(st(1,random(2)),0.003),3,if(lt(ld(1),0.006),48,if(lt(mod(N,6),2),24,6)))))"
     }
     & $Paths.WorkerFfmpeg -y -hide_banner -v error -f lavfi -i 'testsrc2=size=640x360:rate=25' -f lavfi -i 'sine=frequency=440:sample_rate=48000' `
-        -filter_complex "[0:v]drawbox=x=0:y=0:w=640:h=40:c=black:t=fill,$boxes,settb=1/300,setpts='$expr'[v]" -map '[v]' -map 1:a -frames:v 10500 -t 420 `
+        -filter_complex "[0:v]drawbox=x=0:y=0:w=640:h=40:c=black:t=fill,$boxes,settb=1/300,setpts='$expr'[v]" -map '[v]' -map 1:a -frames:v $frames -t 420 `
         -fps_mode passthrough -enc_time_base 1/90000 -c:v libx264 -preset ultrafast -g 50 -keyint_min 50 -sc_threshold 0 -bf 2 -pix_fmt yuv420p -profile:v high -crf 20 -threads 4 `
-        -c:a aac -video_track_timescale 90000 $dst
+        -c:a aac -video_track_timescale 90000 @extra $dst
     if ($LASTEXITCODE) { throw "génération de $name en échec" }
     $dst
 }
@@ -1010,6 +1011,23 @@ function Get-T31Gaps([string]$file) {
         ForEach-Object { [double]::Parse($_, [cultureinfo]::InvariantCulture) } | Sort-Object
     $m = 0..($t.Count - 2) | ForEach-Object { $t[$_ + 1] - $t[$_] } | Measure-Object -Minimum -Maximum
     [pscustomobject]@{ Min = $m.Minimum; Max = $m.Maximum; Last = $t[-1] }
+}
+
+# Le rythme de l'issue, sa dernière image à au moins une demi-image avant sa place sur la grille, et durant 100 ms.
+function New-T31TailSource {
+    $dst = Join-Path $Paths.Media 't31_tail.mp4'
+    if (Test-Path $dst) { return $dst }
+    foreach ($n in @(10500, 10499)) {
+        $tmp = New-T31Source "t31_tail_$n.mp4" 'pattern' $n
+        $last = (Get-T31Gaps $tmp).Last
+        if ((($last / 0.04) % 1) -ge 0.49) { break }   # sa place sur la grille (arrondie au-dessus) est après elle
+    }
+    # Même génération (déterministe), la durée de la dernière image changée à l'encodage : une recopie décalait toute la vidéo de 40 ms.
+    $ticks = [math]::Round($last * 90000)
+    $null = New-T31Source 't31_tail.mp4' 'pattern' $n @('-bsf:v', "setts=duration='if(gte(PTS,$($ticks - 10)),9000,DURATION)'")
+    $d = @(& $Paths.ServerFfprobe -v error -select_streams v:0 -show_entries packet=pts_time,duration_time -of csv=p=0 $dst) | Sort-Object { [double]::Parse("$_".Split(',')[0], [cultureinfo]::InvariantCulture) } | Select-Object -Last 1
+    if ("$d" -notmatch ',0\.1(0*)?$') { throw "t31_tail.mp4 : dernière image $d, pas 100 ms" }
+    $dst
 }
 
 function T31 { T31a; T31bcd }
@@ -1037,10 +1055,11 @@ function T31bcd {
     $pattern = New-T31Source 't31_pattern.mp4' 'pattern'
     $random = New-T31Source 't31_random.mp4' 'random'
     # La vidéo seule retardée de 30 ms : l'audio commence toujours à 0.
+    $tail = New-T31TailSource
     $offGrid = Join-Path $Paths.Media 't31_offgrid.mp4'
     if (-not (Test-Path $offGrid)) { & $Paths.WorkerFfmpeg -y -hide_banner -v error -itsoffset 0.03 -i $pattern -i $pattern -map 0:v -map 1:a -c copy -video_track_timescale 90000 $offGrid }
     $mp4 = 'mov,mp4,m4a,3gp,3g2,mj2'
-    foreach ($c in @(@{ Id = 'b'; Src = $pattern; Label = 'rythme de l''issue' }, @{ Id = 'c'; Src = $random; Label = 'irrégulière au hasard' }, @{ Id = 'd'; Src = $pattern; Label = 'worker arrêté en cours'; Stop = $true }, @{ Id = 'e'; Src = $offGrid; Label = 'première image hors de la grille (30 ms) : sans le filtre, le contrôle tranche'; OffGrid = $true })) {
+    foreach ($c in @(@{ Id = 'b'; Src = $pattern; Label = 'rythme de l''issue' }, @{ Id = 'c'; Src = $random; Label = 'irrégulière au hasard' }, @{ Id = 'd'; Src = $pattern; Label = 'worker arrêté en cours'; Stop = $true }, @{ Id = 'e'; Src = $offGrid; Label = 'première image hors de la grille (30 ms) : sans le filtre, le contrôle tranche'; OffGrid = $true }, @{ Id = 'f'; Src = $tail; Label = 'dernière image de 100 ms hors de la grille' })) {
         Ensure-Workers @('w1', 'w2')
         $name = "t31$($c.Id)"
         $out = Join-Path $Paths.Out "conv-$name.mp4"
