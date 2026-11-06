@@ -102,6 +102,19 @@ public static class SliceShiftCheck
         return pts / 90000.0;
     }
 
+    /// <summary>
+    /// A slice with the fps filter (<see cref="EmbyConversionPlanner.WithFrameRateFilter"/>) holds exactly the output's grid frames from its start frame to its end
+    /// frame. One frame too many or too few would pass the check of the file: the frames after it stay on the grid, 40 ms off what they should show, and only
+    /// their pictures could tell (a slice one frame late at 25 fps goes through <see cref="SyncCheck"/> on simulated ffprobe output: it reads times only, and a repeated time counts once). So they are counted, in the chunks themselves. A
+    /// count of 0 is a chunk that could not be read: rejected too. Null when all are right.
+    /// </summary>
+    public static string? GridFramesProblem(IEnumerable<(int Slice, int Frames, int Expected)> slices)
+    {
+        var wrong = slices.Where(s => s.Frames != s.Expected).ToList();
+        return wrong.Count == 0 ? null
+            : $"{ErrorPrefix} : " + string.Join(", ", wrong.Select(s => $"tranche {s.Slice} de {s.Frames} images au lieu de {s.Expected}"));
+    }
+
     /// <summary>What <see cref="DiagnosticsAnalysis"/> makes of those times: the lowest one and the frame's length.</summary>
     public static ChunkMeasure MeasureStart(int index, IReadOnlyList<double> times) =>
         new(index, times.Count, times.Count > 0 ? times.Min() : null, times.Count > 0 ? times.Max() : null,

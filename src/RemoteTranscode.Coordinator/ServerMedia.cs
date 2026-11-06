@@ -147,7 +147,7 @@ public sealed class ServerMedia(CoordinatorOptions options)
     /// like ffmpeg's -ss), and where in the file a run starting there begins reading (the keyframe it decodes from) and
     /// a run ending there stops (that frame). Positions are null when ffprobe did not report them.
     /// </summary>
-    public sealed record Boundary(double Time, long? KeyframePosition, long? Position, double? SmallestFrameGap = null, double FileStart = 0);
+    public sealed record Boundary(double Time, long? KeyframePosition, long? Position, double? SmallestFrameGap = null, double FileStart = 0, bool VariableRate = false);
 
     /// <summary>
     /// For each time, its <see cref="Boundary"/> (null where no frame was read). One ffprobe pass that reads packets
@@ -174,6 +174,7 @@ public sealed class ServerMedia(CoordinatorOptions options)
         var times0 = frames.Select(f => f.Time).ToList();
         // Between frames read in the same window; the gap between two windows is seconds long and never the smallest.
         double? smallestGap = times0.Zip(times0.Skip(1), (a, b) => b - a).Where(gap => gap > 0).Select(gap => (double?)gap).Min();
+        bool variable = IsVariableRate(times0);
         for (int i = 0; i < times.Count; i++)
         {
             int k = times0.BinarySearch(times[i] - 1e-6);
@@ -183,9 +184,23 @@ public sealed class ServerMedia(CoordinatorOptions options)
             if (k >= frames.Count || !(times[i] <= 0 || frames[k].Time < times[i] + 5))
                 continue;
             long? keyframe = frames.Take(k + 1).LastOrDefault(f => f.Key).Position;
-            result[i] = new Boundary(frames[k].Time, keyframe, frames[k].Position, smallestGap, fileStart);
+            result[i] = new Boundary(frames[k].Time, keyframe, frames[k].Position, smallestGap, fileStart, variable);
         }
         return result;
+    }
+
+    /// <summary>
+    /// Frames read around the boundaries (sorted times) are not regularly spaced, by the library diagnostic's rules. Gaps over a second are
+    /// the jumps between two read windows. A few holes do not count; too few gaps say nothing.
+    /// </summary>
+    public static bool IsVariableRate(IReadOnlyList<double> sortedTimes)
+    {
+        var gaps = sortedTimes.Zip(sortedTimes.Skip(1), (a, b) => b - a).Where(gap => gap is > 0 and < 1).OrderBy(gap => gap).ToList();
+        if (gaps.Count < LibraryDiagnostic.MinimumGaps)
+            return false;
+        double usual = gaps[gaps.Count / 2];
+        double allowed = Math.Max(usual * LibraryDiagnostic.IrregularShare, LibraryDiagnostic.IrregularMinimum);
+        return gaps.Count(gap => Math.Abs(gap - usual) > allowed) >= gaps.Count * LibraryDiagnostic.VariableRateShare;
     }
 
     /// <summary>

@@ -102,6 +102,10 @@ public sealed class EncodeSlice
     [JsonIgnore]
     public int IdleRuns { get; set; }
 
+    /// <summary>Where the previous run of a slice that starts over ended (see <see cref="EncodeTask.FrameRateFiltered"/>): a run ending there again brought nothing new.</summary>
+    [JsonIgnore]
+    public double? PreviousRunEnd { get; set; }
+
     /// <summary>
     /// The resume point last looked up in the source (see EncodeQueue.ResumePointAsync): the time listed by the
     /// previous run, and the source frame found for it (null: none close enough, the listed time is used).
@@ -135,6 +139,21 @@ public sealed class EncodeTask
     public required string Output { get; init; }
     /// <summary>Video part of Emby's command, with placeholders (see <see cref="EmbyConversionPlanner"/>).</summary>
     public required string[] ChunkTemplate { get; init; }
+
+    /// <summary>
+    /// The chunks' frames are picked by the fps filter, from Emby's -r, on a source with irregular frames (EmbyConversionPlanner.WithFrameRateFilter).
+    /// Each frame then lies on the grid of output frames counted from 0, whatever run encodes it, and a slice holds the grid's frames from its start
+    /// frame to its end frame, so its chunks last whole frames (<see cref="ConcatDurations"/>). Such a slice is never resumed, it starts over: where a run
+    /// stopped may lie in a gap of up to 160 ms between source frames, and a run sought to either side of it would repeat frames or leave a hole.
+    /// </summary>
+    public bool FrameRateFiltered { get; init; }
+
+    /// <summary>The time on the output's grid where a source time falls, rounded as the fps filter does, half up. The small term absorbs times printed to the microsecond.</summary>
+    public static double OnGrid(double time, double frame) => Math.Floor(time / frame + 0.5 + 1e-6) * frame;
+
+    /// <summary>The source's first frame lies on the grid of the -r of this command, within 2 ms of rounding; false without -r.</summary>
+    public static bool FirstFrameOnGrid(double first, IReadOnlyList<string> template) =>
+        EmbyConversionPlanner.OutputFrameTime(template) is { } frame && Math.Abs(first - OnGrid(first, frame)) <= 0.002;
     /// <summary>
     /// Changed only by the scheduler loop, and only its tone mapper while <see cref="ToneMappingFinal"/> is false (see
     /// <see cref="ToneMappingDecision"/>).
@@ -305,7 +324,7 @@ public sealed class EncodeTask
 
     public void AlignRunEnd(EncodeSlice slice)
     {
-        if (slice.Last)
+        if (slice.Last || FrameRateFiltered)
             return;
         double shift = slice.End - EncodedEnd(slice);
         if (shift == 0 || Math.Abs(shift) > ListingTolerance(slice))
@@ -332,6 +351,14 @@ public sealed class EncodeTask
     /// </summary>
     public bool DropIdleRun(EncodeSlice slice)
     {
+        // Starting over, a run always encodes something: what tells is ending where the previous one did. The chunks stay, EndsAtVideoEnd may keep them.
+        if (FrameRateFiltered)
+        {
+            double reached = EncodedEnd(slice);
+            bool same = slice.PreviousRunEnd is { } before && Math.Abs(before - reached) < MaxStartShift;
+            slice.PreviousRunEnd = reached;
+            return same;
+        }
         if (EncodedEnd(slice) >= slice.RunStartSeconds + MinRunProgressSeconds)
             return false;
         Chunks.RemoveAll(c => c.Index >= slice.RunStartIndex && c.Index < slice.ChunkLimit);
@@ -346,8 +373,8 @@ public sealed class EncodeTask
     /// restarted the slice every 2 s for an hour.
     /// </summary>
     public bool EndsAtVideoEnd(EncodeSlice slice) =>
-        slice.Last && slice.IdleRuns >= 2 && slice.RunStartIndex > slice.FirstChunk
-        && ContiguousChunks(slice) == slice.RunStartIndex - slice.FirstChunk && Consistent(slice);
+        slice.Last && slice.IdleRuns >= 2 && (FrameRateFiltered ? ContiguousChunks(slice) > 0
+            : slice.RunStartIndex > slice.FirstChunk && ContiguousChunks(slice) == slice.RunStartIndex - slice.FirstChunk) && Consistent(slice);
 
     /// <summary>
     /// The last slice's run was stopped once it had encoded everything (a worker became available just as the server's run
@@ -438,6 +465,20 @@ public sealed class EncodeTask
         int n = ContiguousChunks(slice);
         var chunks = Chunks.Where(c => c.Index >= slice.FirstChunk && c.Index < slice.FirstChunk + n).OrderBy(c => c.Index).ToList();
         var durations = new List<(int, double)>(chunks.Count);
+        if (FrameRateFiltered && OutputFrameTime() is > 0 and var grid)
+        {
+            // On the grid: the slice's start frame and every chunk's start. A listed time further than a quarter of a frame from it stays as
+            // listed: frames too many or missing must show in the check, not be hidden by a length that looks right.
+            double Snap(double listed, double on) => Math.Abs(listed - OnGrid(on, grid)) <= grid / 4 ? OnGrid(on, grid) : listed;
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                double from = i == 0 ? OnGrid(slice.Start, grid) : Snap(chunks[i].Start, chunks[i].Start);
+                double to = i + 1 < chunks.Count ? Snap(chunks[i + 1].Start, chunks[i + 1].Start)
+                    : slice.Last ? chunks[i].End : Snap(chunks[i].End, slice.End);
+                durations.Add((chunks[i].Index, to - from));
+            }
+            return durations;
+        }
         double? frameTime = OutputFrameTime() ?? chunkFrame;
         for (int i = 0; i < chunks.Count; i++)
         {
@@ -642,12 +683,18 @@ public sealed partial class EncodeQueue : IJobOwner
         {
             return new ShimRejected($"analyse de la source impossible : {ex.Message}");
         }
+        var (slices, variableRate) = await SlicesAsync(plan.Input, source.DurationSeconds, token);
+        // One slice has no boundary to meet at, and keeps its resumes. A first frame off the output's grid was not measured with the filter: the assembly starts the video
+        // on that frame, so all of it would lie off the grid. Not filtered, the check still judges the file: Emby converts it again if it must.
+        string[]? filtered = options.EncodeFrameRateFilter && variableRate && slices.Count > 1 && EncodeTask.FirstFrameOnGrid(slices[0].Start, plan.ChunkTemplate)
+            ? EmbyConversionPlanner.WithFrameRateFilter(plan.ChunkTemplate) : null;
         var task = new EncodeTask
         {
             Id = Guid.NewGuid().ToString("N")[..12],
             Input = plan.Input,
             Output = plan.Output,
-            ChunkTemplate = plan.ChunkTemplate,
+            ChunkTemplate = filtered ?? plan.ChunkTemplate,
+            FrameRateFiltered = filtered != null,
             // HDR → SDR: on the GPU (libplacebo) when a connected worker validated it, and then only such workers take
             // its slices (never the server, whose ffmpeg has no libplacebo); otherwise zscale everywhere. Never both in
             // one file: the renderings differ slightly. Provisional until the first run starts (DecideToneMapping):
@@ -656,7 +703,7 @@ public sealed partial class EncodeQueue : IJobOwner
             ToneMappingFinal = !EmbyFilters.NeedsToneMapping(plan.Requirements!.Filters),
             Source = source,
             Shim = shim,
-            Slices = await SlicesAsync(plan.Input, source.DurationSeconds, token),
+            Slices = slices,
             AudioAhead = options.EncodeAudioAhead ? plan.AudioAhead : null,
             Audio = !options.EncodeAudioAhead ? null : plan.AudioAhead is null ? $"converti à l'assemblage ({plan.AudioAheadReason})" : "en attente",
         };
@@ -669,6 +716,8 @@ public sealed partial class EncodeQueue : IJobOwner
             Save();
         }
         logger.LogInformation("Conversion {Id} captured ({Slices} slices): {Input} -> {Output}", task.Id, task.Slices.Count, plan.Input, plan.Output);
+        if (task.FrameRateFiltered)
+            logger.LogInformation("Conversion {Id}: irregular source frames with -r, the slices use the fps filter and start over when interrupted", task.Id);
         if (options.EncodeAudioAhead && plan.AudioAhead is null)
             logger.LogInformation("Conversion {Id}: audio converted at assembly ({Reason})", task.Id, plan.AudioAheadReason);
         if (EmbyFilters.NeedsToneMapping(task.Requirements.Filters))
@@ -685,7 +734,7 @@ public sealed partial class EncodeQueue : IJobOwner
     /// used to keep the whole episode in one slice on one machine). Only when most boundaries are unreadable (the
     /// analysis timed out) does the conversion stay in one slice, which needs no boundary.
     /// </summary>
-    private async Task<List<EncodeSlice>> SlicesAsync(string input, double duration, CancellationToken token)
+    private async Task<(List<EncodeSlice> Slices, bool VariableRate)> SlicesAsync(string input, double duration, CancellationToken token)
     {
         var nominal = EmbyConversionPlanner.Slices(duration);
         ServerMedia.Boundary?[] frames;
@@ -738,13 +787,13 @@ public sealed partial class EncodeQueue : IJobOwner
         if (nominal.Count > 1 && skipped * 2 > nominal.Count - 1)
         {
             logger.LogWarning("{Skipped} of {Count} boundaries of {Input} unreadable: converted as a single slice", skipped, nominal.Count - 1, input);
-            return single;
+            return (single, false);
         }
         // Byte ranges for fetching ahead, with margins: a run reads from the keyframe before its start, and audio
         // packets interleaved around the boundaries. The first slice also needs the file's header.
         const long Margin = 4 << 20;
         double seekMargin = options.EncodeSeekMarginSeconds ?? EmbyConversionPlanner.SeekMargin(frames.FirstOrDefault(f => f != null)?.SmallestFrameGap);
-        return bounds.Select((b, i) => new EncodeSlice
+        return (bounds.Select((b, i) => new EncodeSlice
         {
             Index = i,
             SeekMargin = seekMargin,
@@ -756,7 +805,7 @@ public sealed partial class EncodeQueue : IJobOwner
             Last = i + 1 == bounds.Count,
             ByteStart = i == 0 ? 0 : b.KeyframePosition is { } k ? Math.Max(0, k - Margin) : null,
             ByteEnd = i + 1 < bounds.Count ? bounds[i + 1].Position is { } e ? e + Margin : null : long.MaxValue,
-        }).ToList();
+        }).ToList(), frames.Any(f => f?.VariableRate == true));
     }
 
     /// <summary>Emby stopped the conversion (its ffmpeg got "q" or was killed).</summary>
@@ -1110,8 +1159,8 @@ public sealed partial class EncodeQueue : IJobOwner
                 thenAvoid = connected.Except(second).ToList();
                 avoid = [.. avoid, .. second];
             }
-            // Chunks that do not follow each other cannot be resumed from: the slice starts over.
-            if (!task.Consistent(slice))
+            // Chunks that do not follow each other cannot be resumed from: the slice starts over. A slice with the fps filter always does (EncodeTask.FrameRateFiltered).
+            if (task.FrameRateFiltered || !task.Consistent(slice))
                 task.Chunks.RemoveAll(c => c.Index >= slice.FirstChunk && c.Index < slice.ChunkLimit);
             startIndex = slice.FirstChunk + task.ContiguousChunks(slice);
             startSeconds = task.EncodedEnd(slice);
@@ -1276,7 +1325,7 @@ public sealed partial class EncodeQueue : IJobOwner
         double listed;
         lock (gate)
         {
-            if (!task.IsActive || slice.Done || slice.IsRunning || task.ContiguousChunks(slice) == 0 || !task.Consistent(slice))
+            if (!task.IsActive || slice.Done || slice.IsRunning || task.FrameRateFiltered || task.ContiguousChunks(slice) == 0 || !task.Consistent(slice))
                 return null;
             listed = task.EncodedEnd(slice);
             if (slice.ResumeListed == listed)
@@ -1459,7 +1508,7 @@ public sealed partial class EncodeQueue : IJobOwner
             : $"audio converted at assembly ({task.Audio ?? "désactivé"})");
         string listFile = Path.Combine(SpoolDir(task.Id), "concat.txt");
         await File.WriteAllTextAsync(listFile, list.ToString());
-        if (await SliceShiftProblemAsync(task) is { } shifted)
+        if ((await SliceShiftProblemAsync(task) ?? await GridFramesProblemAsync(task)) is { } shifted)
         {
             await RejectBeforeAssemblyAsync(task, shifted);
             return;
