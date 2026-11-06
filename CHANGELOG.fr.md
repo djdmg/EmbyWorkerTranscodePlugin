@@ -6,6 +6,15 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/). Ver
 
 Le plugin Emby et le worker Windows ont des numéros séparés depuis la 0.7.7 ; chaque entrée indique le composant concerné : **plugin** (DLL d'Emby : coordinateur et relais compris), **worker** (`EmbyRemoteWorker.exe`), **installeur** (`EmbyRemoteWorker-Setup-<version>.exe`), **banc** (banc de test local). Les dates sont celles de construction ou d'installation notées dans `REPRISE.txt` et les documents du projet ; quand une version n'est pas datable ou que son contenu exact n'est pas établi, les versions sont regroupées.
 
+## Plugin 0.7.44 — 06/11/2026
+
+Construit et publié par GitHub Actions (release v0.7.44). Worker inchangé (0.7.20).
+
+### Corrigé
+
+- **Plugin** — Issue #6 : une source aux images irrégulières (10 à 160 ms d'écart) convertie avec le `-r` d'Emby sortait trop longue de quelques images, car `-r` seul répète ou supprime des images selon ce qu'un passage a vu depuis son début, et des passages qui se rejoignent en cours de fichier ne donnaient pas ce que donne un passage unique. Le contrôle rejetait ces fichiers et Emby les refaisait : rien de faux n'a été livré, mais rien n'était gagné. Pour une telle source, la cadence d'Emby est désormais aussi faite par le filtre `fps` dans les tranches : chaque image est choisie d'après son propre temps, des tranches coupées n'importe où contiennent ce que contient un passage unique, et les images de chaque tranche sont comptées avant l'assemblage (une tranche avec une image de trop ou de moins est rejetée). Une telle tranche interrompue repart de zéro au lieu de reprendre. Une source dont la première image est hors de la grille de sortie garde l'ancien chemin, et le contrôle la juge toujours. Désactivable (`EncodeFrameRateFilter`). Banc : T31, 10500 images sur 10500, aucun rejet, worker arrêté en cours compris.
+- **Plugin** — Rapports d'échec : instants d'image attendus sous le `-r` d'Emby, nombres conservés dans les tableaux générés. Rapports seulement ; le contrôle est inchangé.
+
 ## Plugin 0.7.43 — 05/11/2026
 
 Construit et publié par GitHub Actions (release v0.7.43). Worker inchangé (0.7.20).

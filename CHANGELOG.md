@@ -8,6 +8,15 @@ The Emby plugin and the Windows worker have had separate version numbers since 0
 
 Worker PCs are referred to by generic names (PC-A, PC-B, PC-C).
 
+## Plugin 0.7.44 — 2026-11-06
+
+Built and published by GitHub Actions (release v0.7.44). Worker unchanged (0.7.20).
+
+### Fixed
+
+- **Plugin** — Issue #6: a source whose frames are irregular (10 to 160 ms apart) converted with Emby's `-r` came out a few frames too long, because `-r` alone repeats or drops frames depending on what a run has seen since its start, and runs meeting mid-file did not add up to one run. The check rejected those files and Emby converted them again: nothing wrong was delivered, but nothing was gained. For such a source, Emby's rate is now also done by the `fps` filter in the slices: each frame is picked from its own time, slices cut anywhere hold what one run holds, and each slice's frames are counted before the assembly (a slice with a frame too many or too few is rejected). Such a slice starts over rather than resuming when interrupted. A source whose first frame lies off the output's grid keeps the previous way, and the check still judges it. Can be turned off (`EncodeFrameRateFilter`). Bench: T31, 10500 frames of 10500, no rejection, a worker stopped mid-way included.
+- **Plugin** — Failure reports: the frame ticks expected under Emby's `-r`, and numbers kept in generated tables. Reports only; the check is unchanged.
+
 ## Plugin 0.7.43 — 2026-11-05
 
 Built and published by GitHub Actions (release v0.7.43). Worker unchanged (0.7.20).
